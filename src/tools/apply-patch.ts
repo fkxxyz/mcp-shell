@@ -600,6 +600,26 @@ export function registerApplyPatchTool(server: McpServer, cwd: string) {
 	return server.registerTool("apply_patch", {
 		description: DESCRIPTION,
 		inputSchema: { patchText: z.string().describe("The full patch text that describes all changes to be made") },
+		annotations: {
+			readOnlyHint: false,
+			destructiveHint: true,
+			idempotentHint: false,
+			openWorldHint: false,
+		},
+		outputSchema: {
+			message: z.string(),
+			diff: z.string(),
+			files: z.array(z.object({
+				filePath: z.string(),
+				relativePath: z.string(),
+				type: z.enum(["add", "update", "delete", "move"]),
+				patch: z.string(),
+				additions: z.number().int().nonnegative(),
+				deletions: z.number().int().nonnegative(),
+				movePath: z.string().optional(),
+			})),
+			diagnostics: z.record(z.string(), z.unknown()),
+		},
 	}, async ({ patchText }, extra) => {
 		const signal = extra.signal;
 			if (signal?.aborted) throw new Error("aborted");
@@ -638,8 +658,16 @@ export function registerApplyPatchTool(server: McpServer, cwd: string) {
 			});
 			const output = `Success. Updated the following files:\n${summaryLines.join("\n")}`;
 
+			const structuredContent = {
+				message: output,
+				diff: totalDiff,
+				files,
+				diagnostics: {},
+			};
+
 			return {
 				content: [{ type: "text", text: output }],
+				structuredContent,
 				details: {
 					diff: totalDiff,
 					files,

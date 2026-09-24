@@ -7,16 +7,43 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+const contentBlockSchema = z.union([
+	z.object({ type: z.literal("text"), text: z.string() }),
+	z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string() }),
+]);
+
+const detailsSchema = z.record(z.string(), z.unknown()).nullable();
+
 function registerPiTool(
 	server: McpServer,
 	name: string,
 	description: string,
 	inputSchema: Record<string, z.ZodType>,
+	annotations: {
+		readOnlyHint: boolean;
+		destructiveHint: boolean;
+		idempotentHint: boolean;
+		openWorldHint: boolean;
+	},
 	tool: { execute: (id: string, args: any, signal?: AbortSignal, onUpdate?: (result: any) => void, context?: any) => Promise<any> },
 ) {
-	return server.registerTool(name, { description, inputSchema }, async (args, extra) => {
+	return server.registerTool(name, {
+		description,
+		inputSchema,
+		annotations,
+		outputSchema: {
+			content: z.array(contentBlockSchema),
+			details: detailsSchema,
+		},
+	}, async (args, extra) => {
 		const result = await tool.execute(`mcp-${name}`, args, extra.signal, undefined, {});
-		return { content: result.content };
+		return {
+			content: result.content,
+			structuredContent: {
+				content: result.content,
+				details: result.details ?? null,
+			},
+		};
 	});
 }
 
@@ -30,10 +57,20 @@ export function registerBasicTools(server: McpServer, cwd: string) {
 		path: z.string().describe("Path to the file to read (relative or absolute)"),
 		offset: z.number().optional().describe("Line number to start reading from (1-indexed)"),
 		limit: z.number().optional().describe("Maximum number of lines to read"),
+	}, {
+		readOnlyHint: true,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: false,
 	}, read);
 	registerPiTool(server, "write", write.description, {
 		path: z.string().describe("Path to the file to write (relative or absolute)"),
 		content: z.string().describe("Content to write to the file"),
+	}, {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: true,
+		openWorldHint: false,
 	}, write);
 	registerPiTool(server, "edit", edit.description, {
 		path: z.string().describe("Path to the file to edit (relative or absolute)"),
@@ -41,9 +78,19 @@ export function registerBasicTools(server: McpServer, cwd: string) {
 			oldText: z.string().describe("Exact text to replace"),
 			newText: z.string().describe("Replacement text"),
 		})).min(1).describe("Targeted, unique, non-overlapping replacements"),
+	}, {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+		openWorldHint: false,
 	}, edit);
 	registerPiTool(server, "bash", bash.description, {
 		command: z.string().describe("Bash command to execute"),
 		timeout: z.number().positive().optional().describe("Timeout in seconds; no timeout by default"),
+	}, {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+		openWorldHint: true,
 	}, bash);
 }

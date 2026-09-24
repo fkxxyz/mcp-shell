@@ -1995,12 +1995,26 @@ export function registerLspTools(server: McpServer, cwd: string) {
         title: config.label,
         description: config.description,
         inputSchema: schemas[config.name]!,
+        outputSchema: {
+          text: z.string(),
+          details: z.record(z.string(), z.unknown()),
+        },
         annotations: config.name === "lsp_rename"
-          ? { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
-          : { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+          ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+          : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       }, async (params, extra) => {
         const result = await config.execute("mcp", params, extra.signal, undefined, { cwd });
-        return { content: result.content };
+        const text = result.content
+          .filter((item: { type: string }) => item.type === "text")
+          .map((item: { text?: string }) => item.text ?? "")
+          .join("\n");
+        return {
+          content: result.content,
+          structuredContent: {
+            text,
+            details: result.details ?? {},
+          },
+        };
       });
     },
   };
