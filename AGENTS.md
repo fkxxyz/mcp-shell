@@ -8,7 +8,12 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 
 ## Architecture
 
-- `mcp-server.ts` handles configuration loading, OAuth metadata and endpoints, token persistence, bearer authentication, and HTTP startup.
+- `mcp-server.ts` is a compatibility entry point that delegates to `src/main.ts`.
+- `src/main.ts` is the composition root and process lifecycle entry point.
+- `src/config.ts` loads and validates runtime configuration.
+- `src/http/app.ts` assembles the Express application and owns application-level cleanup.
+- `src/auth/` contains OAuth protocol logic, token state persistence, bearer middleware, and HTTP routes.
+- `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
 - `src/tools/` contains modular MCP registrations. `basic.ts` adapts Pi's built-in `read`, `write`, `edit`, and `bash` tools; `apply-patch.ts` and `lsp.ts` adapt Pi code-extension implementations.
 - `@earendil-works/pi-coding-agent` supplies the built-in Pi tool implementations. MCP input schemas are declared locally with Zod.
 - Express handles HTTP routes and form/JSON parsing.

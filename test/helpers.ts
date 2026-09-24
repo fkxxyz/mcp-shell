@@ -1,0 +1,38 @@
+import { createHash } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AppConfig } from "../src/config.js";
+import { AuthStateStore } from "../src/auth/state-store.js";
+
+export function makeConfig(overrides: Partial<AppConfig["oauth"]> = {}): AppConfig {
+  return {
+    port: 0,
+    publicBaseUrl: "https://mcp.example.test",
+    oauth: {
+      clientId: "chatgpt",
+      clientSecret: "client-secret",
+      adminPassword: "admin-password",
+      redirectUri: "https://client.example.test/callback",
+      redirectUriAllowlist: ["prefix:https://chatgpt.com/connector/oauth/"],
+      ...overrides,
+    },
+    paths: {
+      configDir: "/unused",
+      envFile: "/unused/env",
+      stateFile: "/unused/state.json",
+    },
+  };
+}
+
+export async function makeStore(): Promise<{ store: AuthStateStore; dir: string; stateFile: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-server-test-"));
+  const stateFile = join(dir, "state.json");
+  const store = new AuthStateStore(dir, stateFile);
+  await store.load();
+  return { store, dir, stateFile };
+}
+
+export function pkceChallenge(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
