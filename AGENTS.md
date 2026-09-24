@@ -4,11 +4,13 @@
 
 This repository contains a small, single-process remote MCP server intended as a ChatGPT connection demo. It combines OAuth-style authorization endpoints and an MCP Streamable HTTP endpoint in one TypeScript application.
 
-The MCP server currently exposes one tool, `hello`, which lists entries in the host's filesystem root (`/`). Despite the demo's broad `full` OAuth scope and comments about full trust, the implemented tool does not provide a general shell or arbitrary filesystem access.
+The MCP server exposes Pi-compatible file and shell tools, a structured patch tool, and six LSP tools. Authorized callers can read and modify host files and execute arbitrary shell commands as the server process user. Treat access tokens as full host-user access.
 
 ## Architecture
 
-- `mcp-server.ts` is the entire application: configuration loading, OAuth metadata and endpoints, token persistence, bearer authentication, MCP server registration, and HTTP startup.
+- `mcp-server.ts` handles configuration loading, OAuth metadata and endpoints, token persistence, bearer authentication, and HTTP startup.
+- `src/tools/` contains modular MCP registrations. `basic.ts` adapts Pi's built-in `read`, `write`, `edit`, and `bash` tools; `apply-patch.ts` and `lsp.ts` adapt Pi code-extension implementations.
+- `@earendil-works/pi-coding-agent` supplies the built-in Pi tool implementations. MCP input schemas are declared locally with Zod.
 - Express handles HTTP routes and form/JSON parsing.
 - `@modelcontextprotocol/sdk` implements the MCP server and Streamable HTTP transport.
 - OAuth authorization codes, access tokens, and refresh tokens are held in memory and persisted to `~/.mcp-shell/state.json` using atomic rename. The config and state directory/files are created with restrictive permissions.
@@ -21,7 +23,7 @@ The MCP server currently exposes one tool, `hello`, which lists entries in the h
 3. `POST /authorize` checks the single configured owner password and redirects back with a short-lived authorization code.
 4. `POST /token` exchanges the code and PKCE verifier for a one-hour bearer access token and a refresh token. Refresh tokens rotate on use.
 5. The client sends authenticated MCP requests to `/mcp`. The bearer token is checked before the request reaches the MCP transport.
-6. The MCP tool `hello` reads and returns sorted entries from `/`.
+6. MCP requests expose `read`, `write`, `edit`, `bash`, `apply_patch`, and six LSP tools.
 
 ## HTTP Endpoints
 
@@ -63,6 +65,7 @@ There is no configured `start`, `build`, or automated test script in `package.js
 
 - One configured OAuth client and one owner password; no user accounts or login sessions.
 - OAuth behavior is a deliberately minimal implementation, not a general-purpose identity provider.
-- Authorization grants the advertised `full` scope, but actual MCP capabilities are limited to registered tools. Currently that is only the root-directory listing tool.
+- Authorization grants the advertised `full` scope. Registered tools include arbitrary shell execution and file operations as the server process user; absolute paths are accepted by the Pi tools.
+- LSP tools require compatible language servers and project LSP configuration. Rename applies returned workspace edits directly.
 - Token state is shared through a local JSON file, not a database or distributed store. Multiple server instances are not coordinated.
-- There is no configured test suite or documented deployment automation.
+- There is no configured automated test suite or documented deployment automation.

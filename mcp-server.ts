@@ -1,12 +1,13 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { registerTools } from "./src/tools/index.js";
 
 async function main() {
 /**
@@ -16,7 +17,7 @@ async function main() {
  *   - OAuth 2.1-ish Authorization Code + PKCE + Refresh Token
  *   - OAuth discovery metadata
  *   - MCP Streamable HTTP
- *   - one MCP tool: `hello`, which lists `/`
+ *   - modular file, shell, patch, and LSP tools
  *
  * Deliberately minimal:
  *   - OAuth state persists in ~/.mcp-shell/state.json
@@ -346,34 +347,7 @@ function createMcpServer() {
     version: "0.1.0",
   });
 
-  server.registerTool(
-    "hello",
-    {
-      title: "Hello",
-      description: "List the entries in the filesystem root directory (/).",
-      inputSchema: {},
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-      },
-    },
-    async () => {
-      const entries = await readdir("/", { withFileTypes: true });
-      const lines = entries
-        .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`)
-        .sort((a, b) => a.localeCompare(b));
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: lines.join("\n"),
-          },
-        ],
-      };
-    },
-  );
+  registerTools(server, process.cwd());
 
   return server;
 }
