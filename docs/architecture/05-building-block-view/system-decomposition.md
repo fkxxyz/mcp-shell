@@ -38,9 +38,10 @@ Owns:
 - parsing the server env file;
 - optional shell-environment sourcing;
 - command-path construction;
+- resolution of the MCP tool workspace;
 - validation of required server configuration.
 
-`AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings.
+`AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings. The shared configuration contains an explicit tool workspace (`MCP_WORKDIR`), resolved independently from the server process working directory. If it is not configured, the workspace defaults to the current user's home directory.
 
 ## HTTP and Authorization (`src/http/`, `src/auth/`)
 
@@ -73,7 +74,7 @@ Tool registration is modular:
 - `read-image.ts`: image inspection;
 - `lsp.ts`: definition, reference, symbol, diagnostic, and rename operations.
 
-These tools receive the process working directory and, where relevant, command-path policy. They do not decide network exposure or authorization.
+These tools receive the configured MCP tool workspace and, where relevant, command-path policy. Relative shell and filesystem operations are rooted in that workspace. The workspace is independent from the server process working directory, so changing how or where `mcp-shell` is launched does not change tool path semantics. They do not decide network exposure or authorization.
 
 ## Command Policy (`src/command-path.ts`, `bin/`)
 

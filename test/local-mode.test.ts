@@ -13,6 +13,7 @@ function makeLocalConfig(): LocalAppConfig {
   return {
     mode: "local",
     port: 0,
+    workdir: "/unused/workdir",
     commandPath: {
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",

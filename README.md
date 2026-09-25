@@ -79,6 +79,7 @@ Optional values include:
 
 ```env
 PORT=3000
+MCP_WORKDIR=~
 OAUTH_REDIRECT_URI=
 OAUTH_REDIRECT_URI_ALLOWLIST=
 TOOL_LOG_DIR=
@@ -86,6 +87,8 @@ TOOL_LOG_MAX_CALLS=10000
 ```
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
+
+`MCP_WORKDIR` sets the workspace used by relative shell, file, patch, image, and LSP operations. It defaults to the current user's home directory, so tool behavior does not depend on the directory from which the mcp-shell server process was started. Relative configured paths are resolved from `~/.mcp-shell/`.
 
 ## Run
 

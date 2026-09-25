@@ -18,7 +18,7 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
 
-  const sessions = new McpSessionManager(process.cwd(), config.commandPath);
+  const sessions = new McpSessionManager(config.workdir, config.commandPath);
 
   if (config.mode === "local") {
     app.use("/mcp", createMcpRouter(sessions));

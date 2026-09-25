@@ -9,6 +9,7 @@ export function makeConfig(overrides: Partial<RemoteAppConfig["oauth"]> = {}): R
   return {
     mode: "remote",
     port: 0,
+    workdir: "/unused/workdir",
     publicBaseUrl: "https://mcp.example.test",
     commandPath: {
       userBinDir: "/unused/user-bin",

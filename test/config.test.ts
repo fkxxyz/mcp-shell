@@ -41,8 +41,30 @@ test("loadConfig accepts local mode without remote OAuth configuration", async (
     const config = await loadConfig();
     assert.equal(config.mode, "local");
     assert.equal(config.port, 4312);
+    assert.equal(config.workdir, home);
     assert.equal("publicBaseUrl" in config, false);
     assert.equal("oauth" in config, false);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, originalEnv);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig resolves an explicit MCP_WORKDIR independently from process.cwd()", async () => {
+  const home = await mkdtemp(join(tmpdir(), "mcp-shell-workdir-config-test-"));
+  const originalEnv = { ...process.env };
+
+  try {
+    process.env.HOME = home;
+
+    const configDir = join(home, ".mcp-shell");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, "env"), "MODE=local\nMCP_WORKDIR=projects\n", "utf8");
+
+    const config = await loadConfig();
+    assert.equal(config.workdir, join(configDir, "projects"));
+    assert.notEqual(config.workdir, process.cwd());
   } finally {
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, originalEnv);

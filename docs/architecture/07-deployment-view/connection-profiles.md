@@ -81,6 +81,8 @@ This is not a separate mcp-shell mode. It reuses `local` mode; tunnel identity a
 
 The process uses `~/.mcp-shell/` for configuration, token state, user command overrides, and default tool logs. Configuration/state/log directories and sensitive state files are created with restrictive owner permissions where the implementation manages them.
 
+`MCP_WORKDIR` defines the default workspace for host tools in every connection profile. It defaults to the current user's home directory and is resolved independently from the process launch directory. This keeps relative `bash`, file, patch, image, and LSP operations stable across direct launches, service managers, and tunnels.
+
 ## Lifecycle
 
 One process owns all MCP sessions. Restart terminates sessions. Remote OAuth token state survives through `state.json`; local mode does not initialize or require OAuth state for MCP access.
