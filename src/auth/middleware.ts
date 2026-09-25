@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import type { AppConfig } from "../config.js";
+import { toolLogActorFromToken } from "../tool-logs.js";
 import { OAuthService } from "./oauth-service.js";
 
 export function createRequireBearer(config: AppConfig, oauth: OAuthService) {
@@ -12,6 +13,7 @@ export function createRequireBearer(config: AppConfig, oauth: OAuthService) {
       return res.status(401).json({ error: "unauthorized" });
     }
 
+    res.locals.toolLogActor = toolLogActorFromToken(token);
     next();
   };
 }

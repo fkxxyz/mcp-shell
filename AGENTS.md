@@ -14,6 +14,7 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 - `src/http/app.ts` assembles the Express application and owns application-level cleanup.
 - `src/auth/` contains OAuth protocol logic, token state persistence, bearer middleware, and HTTP routes.
 - `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
+- `src/tool-logs.ts` records complete tool inputs and outputs as one gzip payload per call under `~/.mcp-shell/tool-logs/`, with lightweight metadata in `index.jsonl`.
 - `src/tools/` contains modular MCP registrations. `basic.ts` adapts Pi's built-in `read`, `write`, `edit`, and `bash` tools; `apply-patch.ts` and `lsp.ts` adapt Pi code-extension implementations.
 - `@earendil-works/pi-coding-agent` supplies the built-in Pi tool implementations. MCP input schemas are declared locally with Zod.
 - Express handles HTTP routes and form/JSON parsing.
@@ -54,7 +55,7 @@ Redirect configuration:
 - `OAUTH_REDIRECT_URI`: optional exact callback URI.
 - `OAUTH_REDIRECT_URI_ALLOWLIST`: comma-separated callback rules. Bare entries and `exact:` entries match exactly; `prefix:` entries match by string prefix. Configure only trusted callback destinations.
 
-Optional setting: `PORT` (defaults to `3000`). The server listens on `0.0.0.0` and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
+Optional settings: `PORT` (defaults to `3000`), `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), and `TOOL_LOG_MAX_CALLS` (defaults to `10000`). Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. The server listens on `0.0.0.0` and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
 
 ## Development
 

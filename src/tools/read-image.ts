@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { recordToolCall } from "../tool-logs.js";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 100_000_000;
@@ -207,5 +208,5 @@ export function registerReadImageTool(server: McpServer, cwd: string) {
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async ({ path }, extra) => readImage(cwd, path, extra.signal));
+  }, async (input, extra) => recordToolCall("read_image", input, () => readImage(cwd, input.path, extra.signal)));
 }

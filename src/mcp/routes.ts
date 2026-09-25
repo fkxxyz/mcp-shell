@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { withToolLogContext } from "../tool-logs.js";
 import { McpSessionManager } from "./session-manager.js";
 
 export function createMcpRouter(sessions: McpSessionManager): Router {
@@ -15,7 +16,10 @@ export function createMcpRouter(sessions: McpSessionManager): Router {
         });
       }
 
-      await transport.handleRequest(req, res, req.body);
+      await withToolLogContext({
+        session: req.header("mcp-session-id"),
+        actor: res.locals.toolLogActor,
+      }, () => transport.handleRequest(req, res, req.body));
     } catch (error) {
       console.error(error);
       if (!res.headersSent) {
@@ -33,7 +37,10 @@ export function createMcpRouter(sessions: McpSessionManager): Router {
     if (!transport) {
       return res.status(400).type("text").send("Invalid or missing MCP session");
     }
-    await transport.handleRequest(req, res);
+    await withToolLogContext({
+      session: req.header("mcp-session-id"),
+      actor: res.locals.toolLogActor,
+    }, () => transport.handleRequest(req, res));
   });
 
   router.delete("/", async (req, res) => {
@@ -41,7 +48,10 @@ export function createMcpRouter(sessions: McpSessionManager): Router {
     if (!transport) {
       return res.status(400).type("text").send("Invalid or missing MCP session");
     }
-    await transport.handleRequest(req, res);
+    await withToolLogContext({
+      session: req.header("mcp-session-id"),
+      actor: res.locals.toolLogActor,
+    }, () => transport.handleRequest(req, res));
   });
 
   return router;

@@ -7,6 +7,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { extname } from "node:path";
 import { z } from "zod";
+import { recordToolCall } from "../tool-logs.js";
 
 const contentBlockSchema = z.union([
 	z.object({ type: z.literal("text"), text: z.string() }),
@@ -36,7 +37,7 @@ function registerPiTool(
 			content: z.array(contentBlockSchema),
 			details: detailsSchema,
 		},
-	}, async (args, extra) => {
+	}, async (args, extra) => recordToolCall(name, args, async () => {
 		const result = await tool.execute(`mcp-${name}`, args, extra.signal, undefined, {});
 		return {
 			content: result.content,
@@ -45,7 +46,7 @@ function registerPiTool(
 				details: result.details ?? null,
 			},
 		};
-	});
+	}));
 }
 
 export function registerBasicTools(server: McpServer, cwd: string) {

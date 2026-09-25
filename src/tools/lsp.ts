@@ -20,6 +20,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Type } from "typebox";
 import { z } from "zod";
+import { recordToolCall } from "../tool-logs.js";
 
 const DEFAULT_MAX_REFERENCES = 200
 const DEFAULT_MAX_SYMBOLS = 200
@@ -2002,7 +2003,7 @@ export function registerLspTools(server: McpServer, cwd: string) {
         annotations: config.name === "lsp_rename"
           ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
           : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      }, async (params, extra) => {
+      }, async (params, extra) => recordToolCall(config.name, params, async () => {
         const result = await config.execute("mcp", params, extra.signal, undefined, { cwd });
         const text = result.content
           .filter((item: { type: string }) => item.type === "text")
@@ -2015,7 +2016,7 @@ export function registerLspTools(server: McpServer, cwd: string) {
             details: result.details ?? {},
           },
         };
-      });
+      }));
     },
   };
 

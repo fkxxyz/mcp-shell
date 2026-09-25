@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { recordToolCall } from "../tool-logs.js";
 
 const DESCRIPTION = `Use the \`apply_patch\` tool to edit files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
@@ -620,7 +621,8 @@ export function registerApplyPatchTool(server: McpServer, cwd: string) {
 			})),
 			diagnostics: z.record(z.string(), z.unknown()),
 		},
-	}, async ({ patchText }, extra) => {
+	}, async (input, extra) => recordToolCall("apply_patch", input, async () => {
+		const { patchText } = input;
 		const signal = extra.signal;
 			if (signal?.aborted) throw new Error("aborted");
 			if (!patchText) throw new Error("patchText is required");
@@ -674,5 +676,5 @@ export function registerApplyPatchTool(server: McpServer, cwd: string) {
 					diagnostics: {},
 				},
 			};
-		});
+		}));
 }
