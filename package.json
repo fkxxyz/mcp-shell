@@ -1,11 +1,11 @@
 {
-  "name": "mcp-server",
+  "name": "mcp-shell",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck mcp-server.ts src/**/*.ts test/*.ts"
+    "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck mcp-shell.ts src/**/*.ts test/*.ts"
   },
   "keywords": [],
   "author": "",

@@ -8,7 +8,7 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 
 ## Architecture
 
-- `mcp-server.ts` is a compatibility entry point that delegates to `src/main.ts`.
+- `mcp-shell.ts` is a compatibility entry point that delegates to `src/main.ts`.
 - `src/main.ts` is the composition root and process lifecycle entry point.
 - `src/config.ts` loads and validates runtime configuration.
 - `src/http/app.ts` assembles the Express application and owns application-level cleanup.
@@ -66,7 +66,7 @@ The repository command layer wraps `rg`, `find`, `fd`, and `grep` with a 200ms w
 Install dependencies with `npm install`, then run the TypeScript entry point with:
 
 ```sh
-npx tsx mcp-server.ts
+npx tsx mcp-shell.ts
 ```
 
 There is no configured `start` or `build` script in `package.json`. Run the automated tests with `npm test` and the TypeScript check with `npm run typecheck`. No README or TypeScript project configuration is present at the time this document was written.

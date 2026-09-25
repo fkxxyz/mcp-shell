@@ -33,7 +33,7 @@ export function makeConfig(overrides: Partial<AppConfig["oauth"]> = {}): AppConf
 }
 
 export async function makeStore(): Promise<{ store: AuthStateStore; dir: string; stateFile: string }> {
-  const dir = await mkdtemp(join(tmpdir(), "mcp-server-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-test-"));
   const stateFile = join(dir, "state.json");
   const store = new AuthStateStore(dir, stateFile);
   await store.load();
