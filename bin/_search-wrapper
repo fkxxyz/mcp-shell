@@ -1,0 +1,96 @@
+#!/bin/bash
+set -u
+
+LIMIT_SECONDS="0.2"
+KILL_AFTER_SECONDS="0.05"
+
+if (($# < 1)); then
+  echo "search wrapper: missing command name" >&2
+  exit 64
+fi
+
+command_name=$1
+shift
+wrapper_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+
+find_real_command() {
+  local name=$1
+  local entry candidate candidate_dir
+
+  IFS=: read -r -a path_entries <<< "${PATH:-}"
+  for entry in "${path_entries[@]}"; do
+    [[ -n "$entry" ]] || entry=.
+    candidate="$entry/$name"
+    [[ -x "$candidate" && ! -d "$candidate" ]] || continue
+
+    candidate_dir=$(cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P) || continue
+    [[ "$candidate_dir" != "$wrapper_dir" ]] || continue
+
+    printf '%s\n' "$candidate"
+    return 0
+  done
+
+  return 1
+}
+
+real_command=$(find_real_command "$command_name") || {
+  echo "MCP_SEARCH_ERROR" >&2
+  echo "command=$command_name" >&2
+  echo "reason=underlying_command_not_found" >&2
+  exit 127
+}
+
+timeout_command=$(find_real_command timeout) || {
+  echo "MCP_SEARCH_ERROR" >&2
+  echo "command=$command_name" >&2
+  echo "reason=timeout_command_not_found" >&2
+  exit 127
+}
+
+unsafe=0
+args=()
+for arg in "$@"; do
+  if [[ "$arg" == "--unsafe" ]]; then
+    unsafe=1
+  else
+    args+=("$arg")
+  fi
+done
+
+if ((unsafe)); then
+  exec "$real_command" "${args[@]}"
+fi
+
+"$timeout_command" \
+  --signal=TERM \
+  --kill-after="${KILL_AFTER_SECONDS}s" \
+  "${LIMIT_SECONDS}s" \
+  "$real_command" "${args[@]}"
+status=$?
+
+if [[ $status -eq 124 ]]; then
+  cat >&2 <<EOF
+MCP_SEARCH_TIMEOUT
+command=$command_name
+limit_ms=200
+reason=search_time_budget_exceeded
+
+Search exceeded the 200ms resource budget and was terminated.
+
+First, narrow the search scope if possible.
+
+If a broad search is only needed because the required file location or context is unknown,
+report that the available information is insufficient instead of forcing a filesystem-wide search.
+
+If a broad or slow search is genuinely required for the task, rerun the command with --unsafe.
+The wrapper accepts --unsafe anywhere in the arguments and removes it before invoking the real command.
+
+Examples:
+  rg --unsafe "pattern" /large/path
+  find /large/path --unsafe -name "*.json"
+  fd --unsafe "name" /large/path
+  grep --unsafe -R "pattern" /large/path
+EOF
+fi
+
+exit "$status"

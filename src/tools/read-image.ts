@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
 import { recordToolCall } from "../tool-logs.js";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
@@ -105,9 +106,10 @@ async function normalizeWithImageMagick(
   maxDimension: number,
   quality: number,
   signal: AbortSignal | undefined,
+  commandPath: CommandPathPolicy,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const process = spawn("magick", [
+    const child = spawn("magick", [
       "-limit", "memory", "256MiB",
       "-limit", "map", "512MiB",
       "-limit", "area", `${MAX_INPUT_PIXELS}P`,
@@ -119,17 +121,20 @@ async function normalizeWithImageMagick(
       "-alpha", "remove",
       "-quality", String(quality),
       "jpeg:-",
-    ], { stdio: ["pipe", "pipe", "pipe"] });
+    ], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: applyCommandPath(process.env, commandPath),
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    const abort = () => process.kill("SIGTERM");
+    const abort = () => child.kill("SIGTERM");
 
     signal?.addEventListener("abort", abort, { once: true });
-    process.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    process.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    process.stdin.on("error", () => undefined);
-    process.once("error", (error) => reject(new Error(`Could not start ImageMagick: ${error.message}`)));
-    process.once("close", (code) => {
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdin.on("error", () => undefined);
+    child.once("error", (error) => reject(new Error(`Could not start ImageMagick: ${error.message}`)));
+    child.once("close", (code) => {
       signal?.removeEventListener("abort", abort);
       if (signal?.aborted) {
         reject(new Error("Image processing was cancelled."));
@@ -142,13 +147,17 @@ async function normalizeWithImageMagick(
       }
       resolve(Buffer.concat(stdout));
     });
-    process.stdin.end(bytes);
+    child.stdin.end(bytes);
   });
 }
 
-async function encodeForVision(bytes: Uint8Array, signal: AbortSignal | undefined) {
+async function encodeForVision(
+  bytes: Uint8Array,
+  signal: AbortSignal | undefined,
+  commandPath: CommandPathPolicy,
+) {
   for (const profile of outputProfiles) {
-    const data = await normalizeWithImageMagick(bytes, profile.maxDimension, profile.quality, signal);
+    const data = await normalizeWithImageMagick(bytes, profile.maxDimension, profile.quality, signal, commandPath);
 
     if (data.byteLength <= MAX_OUTPUT_BYTES) {
       const dimensions = jpegDimensions(data);
@@ -160,7 +169,12 @@ async function encodeForVision(bytes: Uint8Array, signal: AbortSignal | undefine
   throw new Error(`Image remains larger than ${MAX_OUTPUT_BYTES / 1024 / 1024} MiB after resizing.`);
 }
 
-export async function readImage(cwd: string, inputPath: string, signal?: AbortSignal) {
+export async function readImage(
+  cwd: string,
+  inputPath: string,
+  signal: AbortSignal | undefined,
+  commandPath: CommandPathPolicy,
+) {
   const imagePath = resolve(cwd, expandHomePath(inputPath));
   const imageStat = await stat(imagePath);
   if (!imageStat.isFile()) {
@@ -176,7 +190,7 @@ export async function readImage(cwd: string, inputPath: string, signal?: AbortSi
     throw new Error("Unsupported image format. Use PNG, JPEG, GIF, or WebP.");
   }
 
-  const image = await encodeForVision(bytes, signal);
+  const image = await encodeForVision(bytes, signal, commandPath);
   return {
     content: [
       {
@@ -192,7 +206,7 @@ export async function readImage(cwd: string, inputPath: string, signal?: AbortSi
   };
 }
 
-export function registerReadImageTool(server: McpServer, cwd: string) {
+export function registerReadImageTool(server: McpServer, cwd: string, commandPath: CommandPathPolicy) {
   return server.registerTool("read_image", {
     title: "Read Image",
     description:
@@ -208,5 +222,5 @@ export function registerReadImageTool(server: McpServer, cwd: string) {
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async (input, extra) => recordToolCall("read_image", input, () => readImage(cwd, input.path, extra.signal)));
+  }, async (input, extra) => recordToolCall("read_image", input, () => readImage(cwd, input.path, extra.signal, commandPath)));
 }

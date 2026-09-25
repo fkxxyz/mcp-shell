@@ -57,6 +57,10 @@ Redirect configuration:
 
 Optional settings: `PORT` (defaults to `3000`), `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), and `TOOL_LOG_MAX_CALLS` (defaults to `10000`). Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. The server listens on `0.0.0.0` and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
 
+Command lookup uses a pinned PATH prefix. `~/.mcp-shell/bin` is always the first entry and is the user override layer; this repository's `bin/` directory is always second and is the repository default/guardrail layer. The remaining PATH follows afterward. The prefix is normalized again at child-process spawn boundaries so Pi, LSP configuration, or other environment rewriting cannot move those two entries behind another directory. User overrides intentionally take precedence over repository wrappers, so this mechanism is a customization and guardrail layer, not a security boundary against an authorized caller.
+
+The repository command layer wraps `rg`, `find`, `fd`, and `grep` with a 200ms wall-clock search budget. Searches that exceed the budget are terminated and report `MCP_SEARCH_TIMEOUT`; output produced before termination remains visible. If a broad search is only needed because the required location or context is unknown, report that the available information is insufficient instead of forcing a filesystem-wide search. If a broad or slow search is genuinely required, rerun with the wrapper-only `--unsafe` argument anywhere in the arguments; the wrapper removes it before invoking the real command.
+
 ## Development
 
 Install dependencies with `npm install`, then run the TypeScript entry point with:
@@ -65,7 +69,7 @@ Install dependencies with `npm install`, then run the TypeScript entry point wit
 npx tsx mcp-server.ts
 ```
 
-There is no configured `start`, `build`, or automated test script in `package.json`; its `test` script intentionally exits with an error. No README or TypeScript project configuration is present at the time this document was written.
+There is no configured `start` or `build` script in `package.json`. Run the automated tests with `npm test` and the TypeScript check with `npm run typecheck`. No README or TypeScript project configuration is present at the time this document was written.
 
 ## Current Boundaries
 

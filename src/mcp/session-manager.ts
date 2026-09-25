@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { CommandPathPolicy } from "../command-path.js";
 import { createMcpServer } from "./server.js";
 
 export class McpSessionManager {
   private readonly transports = new Map<string, StreamableHTTPServerTransport>();
 
-  constructor(private readonly cwd: string) {}
+  constructor(
+    private readonly cwd: string,
+    private readonly commandPath: CommandPathPolicy,
+  ) {}
 
   get(sessionId: string | undefined): StreamableHTTPServerTransport | undefined {
     return sessionId ? this.transports.get(sessionId) : undefined;
@@ -33,7 +37,7 @@ export class McpSessionManager {
       if (id) this.transports.delete(id);
     };
 
-    const server = createMcpServer(this.cwd);
+    const server = createMcpServer(this.cwd, this.commandPath);
     await server.connect(transport);
     return transport;
   }

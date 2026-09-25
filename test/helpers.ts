@@ -9,6 +9,10 @@ export function makeConfig(overrides: Partial<AppConfig["oauth"]> = {}): AppConf
   return {
     port: 0,
     publicBaseUrl: "https://mcp.example.test",
+    commandPath: {
+      userBinDir: "/unused/user-bin",
+      repoBinDir: "/unused/repo-bin",
+    },
     oauth: {
       clientId: "chatgpt",
       clientSecret: "client-secret",
@@ -22,6 +26,8 @@ export function makeConfig(overrides: Partial<AppConfig["oauth"]> = {}): AppConf
       envFile: "/unused/env",
       shellEnvFile: null,
       stateFile: "/unused/state.json",
+      userBinDir: "/unused/user-bin",
+      repoBinDir: "/unused/repo-bin",
     },
   };
 }

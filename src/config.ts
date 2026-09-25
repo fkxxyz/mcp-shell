@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { applyCommandPath, type CommandPathPolicy } from "./command-path.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,6 +13,7 @@ type EnvMap = Record<string, string>;
 export type AppConfig = {
   port: number;
   publicBaseUrl: string;
+  commandPath: CommandPathPolicy;
   oauth: {
     clientId: string;
     clientSecret: string;
@@ -23,6 +26,8 @@ export type AppConfig = {
     envFile: string;
     shellEnvFile: string | null;
     stateFile: string;
+    userBinDir: string;
+    repoBinDir: string;
   };
 };
 
@@ -30,6 +35,8 @@ export async function loadConfig(): Promise<AppConfig> {
   const configDir = join(homedir(), ".mcp-shell");
   const envFile = join(configDir, "env");
   const stateFile = join(configDir, "state.json");
+  const userBinDir = join(configDir, "bin");
+  const repoBinDir = fileURLToPath(new URL("../bin/", import.meta.url));
 
   const serverEnv = await readServerEnvFile(configDir, envFile);
   const shellEnvFile = serverEnv.SHELL_ENV_FILE
@@ -46,9 +53,16 @@ export async function loadConfig(): Promise<AppConfig> {
   // server behavior (for example PORT or PUBLIC_BASE_URL).
   Object.assign(process.env, serverEnv);
 
+  await mkdir(userBinDir, { recursive: true, mode: 0o700 });
+  await chmod(userBinDir, 0o700);
+
+  const commandPath: CommandPathPolicy = { userBinDir, repoBinDir };
+  replaceProcessEnvironment(applyCommandPath(process.env, commandPath) as EnvMap);
+
   return {
     port: Number(process.env.PORT ?? 3000),
     publicBaseUrl: mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
+    commandPath,
     oauth: {
       clientId: mustEnv("OAUTH_CLIENT_ID", envFile),
       clientSecret: mustEnv("OAUTH_CLIENT_SECRET", envFile),
@@ -59,7 +73,7 @@ export async function loadConfig(): Promise<AppConfig> {
         .map((value) => value.trim())
         .filter(Boolean),
     },
-    paths: { configDir, envFile, shellEnvFile, stateFile },
+    paths: { configDir, envFile, shellEnvFile, stateFile, userBinDir, repoBinDir },
   };
 }
 

@@ -7,6 +7,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { extname } from "node:path";
 import { z } from "zod";
+import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
 import { recordToolCall } from "../tool-logs.js";
 
 const contentBlockSchema = z.union([
@@ -49,7 +50,7 @@ function registerPiTool(
 	}));
 }
 
-export function registerBasicTools(server: McpServer, cwd: string) {
+export function registerBasicTools(server: McpServer, cwd: string, commandPath: CommandPathPolicy) {
 	const read = createReadTool(cwd);
 	const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 	const textRead = {
@@ -70,7 +71,15 @@ export function registerBasicTools(server: McpServer, cwd: string) {
 	};
 	const write = createWriteTool(cwd);
 	const edit = createEditTool(cwd);
-	const bash = createBashTool(cwd, { exposeSessionEnvironment: false });
+	const bash = createBashTool(cwd, {
+		exposeSessionEnvironment: false,
+		spawnHook(context) {
+			return {
+				...context,
+				env: applyCommandPath(context.env, commandPath),
+			};
+		},
+	});
 
 	registerPiTool(server, "read", textRead.description, {
 		path: z.string().describe("Path to the file to read (relative or absolute)"),

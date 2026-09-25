@@ -22,7 +22,7 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
   await authState.load();
 
   const oauth = new OAuthService(config, authState);
-  const sessions = new McpSessionManager(process.cwd());
+  const sessions = new McpSessionManager(process.cwd(), config.commandPath);
 
   app.use(createOAuthRouter(config, oauth));
   app.use("/mcp", createRequireBearer(config, oauth), createMcpRouter(sessions));
