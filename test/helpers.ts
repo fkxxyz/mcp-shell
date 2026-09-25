@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AppConfig } from "../src/config.js";
+import type { RemoteAppConfig } from "../src/config.js";
 import { AuthStateStore } from "../src/auth/state-store.js";
 
-export function makeConfig(overrides: Partial<AppConfig["oauth"]> = {}): AppConfig {
+export function makeConfig(overrides: Partial<RemoteAppConfig["oauth"]> = {}): RemoteAppConfig {
   return {
+    mode: "remote",
     port: 0,
     publicBaseUrl: "https://mcp.example.test",
     commandPath: {

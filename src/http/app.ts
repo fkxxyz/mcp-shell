@@ -18,11 +18,22 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
 
+  const sessions = new McpSessionManager(process.cwd(), config.commandPath);
+
+  if (config.mode === "local") {
+    app.use("/mcp", createMcpRouter(sessions));
+
+    return {
+      app,
+      async close() {
+        await sessions.closeAll();
+      },
+    };
+  }
+
   const authState = new AuthStateStore(config.paths.configDir, config.paths.stateFile);
   await authState.load();
-
   const oauth = new OAuthService(config, authState);
-  const sessions = new McpSessionManager(process.cwd(), config.commandPath);
 
   app.use(createOAuthRouter(config, oauth));
   app.use("/mcp", createRequireBearer(config, oauth), createMcpRouter(sessions));

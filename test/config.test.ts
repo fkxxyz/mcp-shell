@@ -1,14 +1,54 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  listenHostForMode,
+  loadConfig,
+  parseConnectionMode,
   parseEnvFile,
   parseNullSeparatedEnvironment,
   resolveConfiguredPath,
   sourceShellEnvironment,
 } from "../src/config.js";
+
+test("connection mode defaults to remote and maps to fixed listener hosts", () => {
+  assert.equal(parseConnectionMode(undefined), "remote");
+  assert.equal(parseConnectionMode(""), "remote");
+  assert.equal(parseConnectionMode("local"), "local");
+  assert.equal(parseConnectionMode("remote"), "remote");
+  assert.equal(listenHostForMode("local"), "127.0.0.1");
+  assert.equal(listenHostForMode("remote"), "0.0.0.0");
+  assert.throws(() => parseConnectionMode("public"), /Invalid MODE: public/);
+});
+
+test("loadConfig accepts local mode without remote OAuth configuration", async () => {
+  const home = await mkdtemp(join(tmpdir(), "mcp-shell-local-config-test-"));
+  const originalEnv = { ...process.env };
+
+  try {
+    process.env.HOME = home;
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.OAUTH_CLIENT_ID;
+    delete process.env.OAUTH_CLIENT_SECRET;
+    delete process.env.ADMIN_PASSWORD;
+
+    const configDir = join(home, ".mcp-shell");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, "env"), "MODE=local\nPORT=4312\n", "utf8");
+
+    const config = await loadConfig();
+    assert.equal(config.mode, "local");
+    assert.equal(config.port, 4312);
+    assert.equal("publicBaseUrl" in config, false);
+    assert.equal("oauth" in config, false);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, originalEnv);
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 test("parseEnvFile parses simple dotenv values without shell evaluation", () => {
   assert.deepEqual(

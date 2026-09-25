@@ -10,17 +10,11 @@ const execFileAsync = promisify(execFile);
 
 type EnvMap = Record<string, string>;
 
-export type AppConfig = {
+export type ConnectionMode = "local" | "remote";
+
+type BaseAppConfig = {
   port: number;
-  publicBaseUrl: string;
   commandPath: CommandPathPolicy;
-  oauth: {
-    clientId: string;
-    clientSecret: string;
-    adminPassword: string;
-    redirectUri: string;
-    redirectUriAllowlist: string[];
-  };
   paths: {
     configDir: string;
     envFile: string;
@@ -30,6 +24,24 @@ export type AppConfig = {
     repoBinDir: string;
   };
 };
+
+export type LocalAppConfig = BaseAppConfig & {
+  mode: "local";
+};
+
+export type RemoteAppConfig = BaseAppConfig & {
+  mode: "remote";
+  publicBaseUrl: string;
+  oauth: {
+    clientId: string;
+    clientSecret: string;
+    adminPassword: string;
+    redirectUri: string;
+    redirectUriAllowlist: string[];
+  };
+};
+
+export type AppConfig = LocalAppConfig | RemoteAppConfig;
 
 export async function loadConfig(): Promise<AppConfig> {
   const configDir = join(homedir(), ".mcp-shell");
@@ -59,10 +71,19 @@ export async function loadConfig(): Promise<AppConfig> {
   const commandPath: CommandPathPolicy = { userBinDir, repoBinDir };
   replaceProcessEnvironment(applyCommandPath(process.env, commandPath) as EnvMap);
 
-  return {
+  const mode = parseConnectionMode(process.env.MODE);
+  const common = {
     port: Number(process.env.PORT ?? 3000),
-    publicBaseUrl: mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
     commandPath,
+    paths: { configDir, envFile, shellEnvFile, stateFile, userBinDir, repoBinDir },
+  };
+
+  if (mode === "local") return { ...common, mode };
+
+  return {
+    ...common,
+    mode,
+    publicBaseUrl: mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
     oauth: {
       clientId: mustEnv("OAUTH_CLIENT_ID", envFile),
       clientSecret: mustEnv("OAUTH_CLIENT_SECRET", envFile),
@@ -73,7 +94,6 @@ export async function loadConfig(): Promise<AppConfig> {
         .map((value) => value.trim())
         .filter(Boolean),
     },
-    paths: { configDir, envFile, shellEnvFile, stateFile, userBinDir, repoBinDir },
   };
 }
 
@@ -88,6 +108,7 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
 
     const template = [
       "# MCP Shell configuration",
+      "MODE=remote",
       "PUBLIC_BASE_URL=https://mcp.example.com",
       "OAUTH_CLIENT_ID=chatgpt",
       "OAUTH_CLIENT_SECRET=CHANGE_ME",
@@ -111,6 +132,16 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
 
     throw new Error(`Created config template at ${envFile}. Edit it, then start the server again.`);
   }
+}
+
+export function parseConnectionMode(value: string | undefined): ConnectionMode {
+  if (value == null || value === "") return "remote";
+  if (value === "local" || value === "remote") return value;
+  throw new Error(`Invalid MODE: ${value}. Expected local or remote.`);
+}
+
+export function listenHostForMode(mode: ConnectionMode): "127.0.0.1" | "0.0.0.0" {
+  return mode === "local" ? "127.0.0.1" : "0.0.0.0";
 }
 
 export function parseEnvFile(raw: string): EnvMap {

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { AppConfig } from "../config.js";
+import type { RemoteAppConfig } from "../config.js";
 import { AuthStateStore } from "./state-store.js";
 
 const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -18,7 +18,7 @@ export type AuthorizeParams = {
 
 export class OAuthService {
   constructor(
-    private readonly config: AppConfig,
+    private readonly config: RemoteAppConfig,
     private readonly state: AuthStateStore,
   ) {}
 

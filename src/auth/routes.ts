@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from "express";
-import type { AppConfig } from "../config.js";
+import type { RemoteAppConfig } from "../config.js";
 import { OAuthService, type AuthorizeParams } from "./oauth-service.js";
 
-export function createOAuthRouter(config: AppConfig, oauth: OAuthService): Router {
+export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService): Router {
   const router = Router();
 
   router.get("/.well-known/oauth-protected-resource", (_req, res) => {

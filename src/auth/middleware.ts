@@ -1,9 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
-import type { AppConfig } from "../config.js";
+import type { RemoteAppConfig } from "../config.js";
 import { toolLogActorFromToken } from "../tool-logs.js";
 import { OAuthService } from "./oauth-service.js";
 
-export function createRequireBearer(config: AppConfig, oauth: OAuthService) {
+export function createRequireBearer(config: RemoteAppConfig, oauth: OAuthService) {
   return function requireBearer(req: Request, res: Response, next: NextFunction) {
     const match = /^Bearer\s+(.+)$/i.exec(req.header("authorization") ?? "");
     const token = match?.[1];

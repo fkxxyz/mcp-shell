@@ -1,8 +1,8 @@
 # mcp-shell
 
-A remote MCP server that gives ChatGPT and other MCP clients controlled access to a host machine's shell, files, patching, image inspection, and LSP capabilities.
+A local-or-remote MCP server that gives ChatGPT and other MCP clients controlled access to a host machine's shell, files, patching, image inspection, and LSP capabilities.
 
-It is intended to make a trusted development machine directly usable by an MCP client over HTTPS.
+It can serve a same-machine client over loopback without built-in OAuth, or a remote client through the existing OAuth-protected HTTPS deployment.
 
 ## What it provides
 
@@ -17,7 +17,8 @@ It is intended to make a trusted development machine directly usable by an MCP c
   - diagnostics
   - prepare rename
   - rename
-- OAuth-style authorization with PKCE
+- Local loopback mode without built-in OAuth
+- Remote OAuth-style authorization with PKCE
 - Streamable HTTP MCP transport
 - Persistent token state
 - Tool-call logging
@@ -29,7 +30,7 @@ It is intended to make a trusted development machine directly usable by an MCP c
 
 An authorized client can read and modify files and execute commands with the permissions of the user running the server. In practice, access to this MCP endpoint should be treated similarly to remote shell access.
 
-Use it only behind HTTPS, protect the OAuth credentials, and expose it only to clients you trust.
+In `local` mode, the server binds only to `127.0.0.1`; treat any tunnel forwarding that endpoint as part of the trusted boundary. In `remote` mode, use HTTPS ingress, protect the OAuth credentials, and expose it only to clients you trust.
 
 ## Requirements
 
@@ -54,14 +55,25 @@ Runtime configuration lives at:
 
 On first startup, the server creates a template configuration and exits.
 
-Required values:
+Choose a connection mode:
 
 ```env
+MODE=local
+```
+
+`local` mode needs no OAuth or public URL configuration and listens only on `127.0.0.1`.
+
+For remote access, use:
+
+```env
+MODE=remote
 PUBLIC_BASE_URL=https://mcp-shell.example.com
 OAUTH_CLIENT_ID=your-client-id
 OAUTH_CLIENT_SECRET=your-client-secret
 ADMIN_PASSWORD=your-password
 ```
+
+If `MODE` is omitted, it defaults to `remote` for compatibility with existing configurations.
 
 Optional values include:
 
@@ -73,7 +85,7 @@ TOOL_LOG_DIR=
 TOOL_LOG_MAX_CALLS=10000
 ```
 
-`PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
+In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
 
 ## Run
 
@@ -81,19 +93,21 @@ TOOL_LOG_MAX_CALLS=10000
 npx tsx mcp-shell.ts
 ```
 
-The MCP endpoint is exposed at:
+In local mode, the MCP endpoint is:
 
 ```text
-<PUBLIC_BASE_URL>/mcp
+http://127.0.0.1:<PORT>/mcp
 ```
 
-The server listens on `0.0.0.0` using `PORT`, which defaults to `3000`.
+In remote mode, the MCP endpoint is `<PUBLIC_BASE_URL>/mcp` and the server listens on `0.0.0.0`. `PORT` defaults to `3000` in both modes.
 
-In a long-running deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS.
+For long-running remote deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS.
 
 ## Connect
 
-An MCP client first discovers the OAuth metadata, completes authorization, and then connects to:
+In local mode, connect directly to `http://127.0.0.1:<PORT>/mcp`; the built-in OAuth routes are not installed.
+
+In remote mode, an MCP client first discovers the OAuth metadata, completes authorization, and then connects to:
 
 ```text
 https://your-host.example.com/mcp
@@ -109,7 +123,7 @@ Relevant endpoints:
 /mcp
 ```
 
-The current authorization model is intentionally simple: one configured OAuth client and one owner password.
+The remote authorization model is intentionally simple: one configured OAuth client and one owner password.
 
 ## Local state
 
