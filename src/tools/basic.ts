@@ -5,6 +5,7 @@ import {
 	createWriteTool,
 } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { extname } from "node:path";
 import { z } from "zod";
 
 const contentBlockSchema = z.union([
@@ -49,11 +50,28 @@ function registerPiTool(
 
 export function registerBasicTools(server: McpServer, cwd: string) {
 	const read = createReadTool(cwd);
+	const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
+	const textRead = {
+		...read,
+		description:
+			"Read the contents of a text file. Images are not supported; use read_image for image files. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+		async execute(id: string, args: any, signal?: AbortSignal, onUpdate?: (result: any) => void, context?: any) {
+			if (imageExtensions.has(extname(args.path).toLowerCase())) {
+				throw new Error("read only supports text files. Use read_image for image files.");
+			}
+
+			const result = await read.execute(id, args, signal, onUpdate);
+			if (result.content?.some((item: { type?: string }) => item.type === "image")) {
+				throw new Error("read only supports text files. Use read_image for image files.");
+			}
+			return result;
+		},
+	};
 	const write = createWriteTool(cwd);
 	const edit = createEditTool(cwd);
 	const bash = createBashTool(cwd, { exposeSessionEnvironment: false });
 
-	registerPiTool(server, "read", read.description, {
+	registerPiTool(server, "read", textRead.description, {
 		path: z.string().describe("Path to the file to read (relative or absolute)"),
 		offset: z.number().optional().describe("Line number to start reading from (1-indexed)"),
 		limit: z.number().optional().describe("Maximum number of lines to read"),
@@ -62,7 +80,7 @@ export function registerBasicTools(server: McpServer, cwd: string) {
 		destructiveHint: false,
 		idempotentHint: true,
 		openWorldHint: false,
-	}, read);
+	}, textRead);
 	registerPiTool(server, "write", write.description, {
 		path: z.string().describe("Path to the file to write (relative or absolute)"),
 		content: z.string().describe("Content to write to the file"),
