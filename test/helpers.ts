@@ -20,6 +20,7 @@ export function makeConfig(overrides: Partial<AppConfig["oauth"]> = {}): AppConf
     paths: {
       configDir: "/unused",
       envFile: "/unused/env",
+      shellEnvFile: null,
       stateFile: "/unused/state.json",
     },
   };

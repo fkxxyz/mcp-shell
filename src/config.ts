@@ -1,6 +1,12 @@
+import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+type EnvMap = Record<string, string>;
 
 export type AppConfig = {
   port: number;
@@ -15,6 +21,7 @@ export type AppConfig = {
   paths: {
     configDir: string;
     envFile: string;
+    shellEnvFile: string | null;
     stateFile: string;
   };
 };
@@ -24,7 +31,20 @@ export async function loadConfig(): Promise<AppConfig> {
   const envFile = join(configDir, "env");
   const stateFile = join(configDir, "state.json");
 
-  await loadEnvFile(configDir, envFile);
+  const serverEnv = await readServerEnvFile(configDir, envFile);
+  const shellEnvFile = serverEnv.SHELL_ENV_FILE
+    ? resolveConfiguredPath(serverEnv.SHELL_ENV_FILE, configDir)
+    : null;
+
+  if (shellEnvFile) {
+    const shellEnv = await sourceShellEnvironment(shellEnvFile);
+    replaceProcessEnvironment(shellEnv);
+  }
+
+  // The MCP server's own configuration is authoritative over the sourced
+  // user environment. This prevents unrelated shell variables from changing
+  // server behavior (for example PORT or PUBLIC_BASE_URL).
+  Object.assign(process.env, serverEnv);
 
   return {
     port: Number(process.env.PORT ?? 3000),
@@ -39,38 +59,16 @@ export async function loadConfig(): Promise<AppConfig> {
         .map((value) => value.trim())
         .filter(Boolean),
     },
-    paths: { configDir, envFile, stateFile },
+    paths: { configDir, envFile, shellEnvFile, stateFile },
   };
 }
 
-async function loadEnvFile(configDir: string, envFile: string): Promise<void> {
+async function readServerEnvFile(configDir: string, envFile: string): Promise<EnvMap> {
   await mkdir(configDir, { recursive: true, mode: 0o700 });
   await chmod(configDir, 0o700);
 
   try {
-    const raw = await readFile(envFile, "utf8");
-
-    for (const originalLine of raw.split(/\r?\n/)) {
-      const line = originalLine.trim();
-      if (!line || line.startsWith("#")) continue;
-
-      const eq = line.indexOf("=");
-      if (eq <= 0) continue;
-
-      const key = line.slice(0, eq).trim();
-      let value = line.slice(eq + 1).trim();
-
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-
-      if (process.env[key] === undefined) {
-        process.env[key] = value;
-      }
-    }
+    return parseEnvFile(await readFile(envFile, "utf8"));
   } catch (error: any) {
     if (error?.code !== "ENOENT") throw error;
 
@@ -86,6 +84,8 @@ async function loadEnvFile(configDir: string, envFile: string): Promise<void> {
       "OAUTH_REDIRECT_URI_ALLOWLIST=prefix:https://chatgpt.com/connector/oauth/",
       "ADMIN_PASSWORD=CHANGE_ME",
       "PORT=3000",
+      "# Optional shell file to source at startup for PATH and other user environment variables:",
+      "SHELL_ENV_FILE=~/.shellenv",
       "",
     ].join("\n");
 
@@ -94,6 +94,93 @@ async function loadEnvFile(configDir: string, envFile: string): Promise<void> {
 
     throw new Error(`Created config template at ${envFile}. Edit it, then start the server again.`);
   }
+}
+
+export function parseEnvFile(raw: string): EnvMap {
+  const env: EnvMap = {};
+
+  for (const originalLine of raw.split(/\r?\n/)) {
+    const line = originalLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    env[key] = value;
+  }
+
+  return env;
+}
+
+export function resolveConfiguredPath(path: string, configDir: string): string {
+  const expanded = path === "~"
+    ? homedir()
+    : path.startsWith("~/")
+      ? join(homedir(), path.slice(2))
+      : path;
+
+  return isAbsolute(expanded) ? expanded : resolve(configDir, expanded);
+}
+
+export async function sourceShellEnvironment(shellEnvFile: string): Promise<EnvMap> {
+  try {
+    const { stdout } = await execFileAsync(
+      "/bin/bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        'set -a; source "$1" >&2 || exit $?; env -0',
+        "mcp-shell-env",
+        shellEnvFile,
+      ],
+      {
+        env: process.env,
+        encoding: "buffer",
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+
+    return parseNullSeparatedEnvironment(stdout as Buffer);
+  } catch (error: any) {
+    const detail = Buffer.isBuffer(error?.stderr)
+      ? error.stderr.toString("utf8").trim()
+      : typeof error?.stderr === "string"
+        ? error.stderr.trim()
+        : "";
+    const suffix = detail ? `: ${detail}` : "";
+    throw new Error(`Failed to load shell environment from ${shellEnvFile}${suffix}`, { cause: error });
+  }
+}
+
+export function parseNullSeparatedEnvironment(raw: Buffer): EnvMap {
+  const env: EnvMap = {};
+
+  for (const entry of raw.toString("utf8").split("\0")) {
+    if (!entry) continue;
+    const eq = entry.indexOf("=");
+    if (eq <= 0) continue;
+    env[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+
+  return env;
+}
+
+function replaceProcessEnvironment(env: EnvMap): void {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in env)) delete process.env[key];
+  }
+  Object.assign(process.env, env);
 }
 
 function mustEnv(name: string, envFile: string): string {

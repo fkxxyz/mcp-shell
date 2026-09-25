@@ -10,6 +10,7 @@ async function main(): Promise<void> {
     console.log(`Public MCP URL: ${config.publicBaseUrl}/mcp`);
     console.log(`OAuth issuer:   ${config.publicBaseUrl}`);
     console.log(`Config file:    ${config.paths.envFile}`);
+    console.log(`Shell env file: ${config.paths.shellEnvFile ?? "(none)"}`);
     console.log(`State file:     ${config.paths.stateFile}`);
   });
 
