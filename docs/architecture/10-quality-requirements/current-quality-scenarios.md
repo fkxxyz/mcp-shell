@@ -29,6 +29,10 @@ facets:
 | Correctness | A sessionless non-initialize MCP POST arrives. | The request is rejected rather than creating an implicit session. |
 | Correctness | An authorization code is replayed. | The replay is rejected after the code has been consumed. |
 | Correctness | A refresh token is used successfully. | A new token pair is issued and the used refresh token cannot be used again. |
+| Correctness | Two Shells are created for the same directory. | They receive distinct increasing IDs and retain independent identities. |
+| Correctness | A Shell-aware tool receives an unknown `shell_id`. | The call is rejected rather than falling back to another working directory. |
+| Correctness | `create_shell` finds a root `AGENTS.md`. | Its contents are appended to the returned bootstrap instructions; a missing file is accepted. |
+| Operability | mcp-shell restarts after a Shell was created. | The existing `shell_id` still resolves to the persisted Shell root without loading the complete Shell history. |
 | Operability | The process receives SIGINT or SIGTERM. | HTTP admission stops, active MCP transports are closed, and authorization state is persisted. |
 | Operability | A repository-wrapped broad search exceeds its normal budget. | It is terminated near the configured wall-clock budget and explains how to narrow or explicitly bypass the guardrail. |
 | Operability | A user has no public IP or server but has a supported local MCP client or trusted outbound tunnel. | No public mcp-shell listener or self-managed server is required. |
@@ -37,4 +41,4 @@ facets:
 
 ## Verification
 
-Use automated tests for configuration, authorization state, HTTP routes, session behavior, command-path rules, search wrappers, and tool logging. Deployment-mode verification must include listener-address inspection, not only route-level tests.
+Use automated tests for configuration, authorization state, HTTP routes, MCP session behavior, durable Shell behavior, command-path rules, search wrappers, and tool logging. Deployment-mode verification must include listener-address inspection, not only route-level tests.

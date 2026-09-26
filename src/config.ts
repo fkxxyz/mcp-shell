@@ -14,13 +14,13 @@ export type ConnectionMode = "local" | "remote";
 
 type BaseAppConfig = {
   port: number;
-  workdir: string;
   commandPath: CommandPathPolicy;
   paths: {
     configDir: string;
     envFile: string;
     shellEnvFile: string | null;
     stateFile: string;
+    shellsDbFile: string;
     userBinDir: string;
     repoBinDir: string;
   };
@@ -48,6 +48,7 @@ export async function loadConfig(): Promise<AppConfig> {
   const configDir = join(homedir(), ".mcp-shell");
   const envFile = join(configDir, "env");
   const stateFile = join(configDir, "state.json");
+  const shellsDbFile = join(configDir, "shells.db");
   const userBinDir = join(configDir, "bin");
   const repoBinDir = fileURLToPath(new URL("../bin/", import.meta.url));
 
@@ -73,12 +74,10 @@ export async function loadConfig(): Promise<AppConfig> {
   replaceProcessEnvironment(applyCommandPath(process.env, commandPath) as EnvMap);
 
   const mode = parseConnectionMode(process.env.MODE);
-  const workdir = resolveConfiguredPath(process.env.MCP_WORKDIR || "~", configDir);
   const common = {
     port: Number(process.env.PORT ?? 3000),
-    workdir,
     commandPath,
-    paths: { configDir, envFile, shellEnvFile, stateFile, userBinDir, repoBinDir },
+    paths: { configDir, envFile, shellEnvFile, stateFile, shellsDbFile, userBinDir, repoBinDir },
   };
 
   if (mode === "local") return { ...common, mode };
@@ -122,8 +121,6 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "OAUTH_REDIRECT_URI_ALLOWLIST=prefix:https://chatgpt.com/connector/oauth/",
       "ADMIN_PASSWORD=CHANGE_ME",
       "PORT=3000",
-      "# Default workspace for shell, file, patch, image, and LSP tools:",
-      "MCP_WORKDIR=~",
       "# Tool call history. Payloads are gzip-compressed and the oldest calls are removed by count.",
       "TOOL_LOG_DIR=",
       "TOOL_LOG_MAX_CALLS=10000",

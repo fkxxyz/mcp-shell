@@ -2,7 +2,9 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { ShellStore } from "../shell-store.js";
 import { recordToolCall } from "../tool-logs.js";
+import { shellIdSchema } from "./shell.js";
 
 const DESCRIPTION = `Use the \`apply_patch\` tool to edit files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
@@ -37,7 +39,7 @@ It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with \`+\` even when creating a file
-- Patch paths may be relative to the current workspace or absolute. Relative paths are resolved against the current workspace and may include \`..\`.`;
+- Patch paths may be relative to the shell root or absolute. Relative paths are resolved against the shell root and may include \`..\`.`;
 
 type Hunk =
 	| { type: "add"; path: string; contents: string }
@@ -597,10 +599,13 @@ async function applyChanges(fileChanges: FileChange[]): Promise<void> {
 	}
 }
 
-export function registerApplyPatchTool(server: McpServer, cwd: string) {
+export function registerApplyPatchTool(server: McpServer, shells: ShellStore) {
 	return server.registerTool("apply_patch", {
 		description: DESCRIPTION,
-		inputSchema: { patchText: z.string().describe("The full patch text that describes all changes to be made") },
+		inputSchema: {
+			shell_id: shellIdSchema,
+			patchText: z.string().describe("The full patch text that describes all changes to be made"),
+		},
 		annotations: {
 			readOnlyHint: false,
 			destructiveHint: true,
@@ -623,6 +628,7 @@ export function registerApplyPatchTool(server: McpServer, cwd: string) {
 		},
 	}, async (input, extra) => recordToolCall("apply_patch", input, async () => {
 		const { patchText } = input;
+		const cwd = shells.require(input.shell_id).cwd;
 		const signal = extra.signal;
 			if (signal?.aborted) throw new Error("aborted");
 			if (!patchText) throw new Error("patchText is required");

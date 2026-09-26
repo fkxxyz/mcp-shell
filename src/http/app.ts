@@ -6,6 +6,7 @@ import { AuthStateStore } from "../auth/state-store.js";
 import { createRequireBearer } from "../auth/middleware.js";
 import { McpSessionManager } from "../mcp/session-manager.js";
 import { createMcpRouter } from "../mcp/routes.js";
+import { ShellStore } from "../shell-store.js";
 
 export type AppRuntime = {
   app: Express;
@@ -18,7 +19,8 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
 
-  const sessions = new McpSessionManager(config.workdir, config.commandPath);
+  const shells = await ShellStore.open(config.paths.configDir, config.paths.shellsDbFile);
+  const sessions = new McpSessionManager(shells, config.commandPath);
 
   if (config.mode === "local") {
     app.use("/mcp", createMcpRouter(sessions));
@@ -27,6 +29,7 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
       app,
       async close() {
         await sessions.closeAll();
+        shells.close();
       },
     };
   }
@@ -49,6 +52,7 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
       clearInterval(cleanupTimer);
       await sessions.closeAll();
       await authState.persist();
+      shells.close();
     },
   };
 }

@@ -5,7 +5,9 @@ import { resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import type { ShellStore } from "../shell-store.js";
 import { recordToolCall } from "../tool-logs.js";
+import { shellIdSchema } from "./shell.js";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 100_000_000;
@@ -206,14 +208,15 @@ export async function readImage(
   };
 }
 
-export function registerReadImageTool(server: McpServer, cwd: string, commandPath: CommandPathPolicy) {
+export function registerReadImageTool(server: McpServer, shells: ShellStore, commandPath: CommandPathPolicy) {
   return server.registerTool("read_image", {
     title: "Read Image",
     description:
       "Inspect a workspace image when visual details affect the task, such as a screenshot, mockup, chart, diagram, or rendered UI. Do not use for source files or when text extraction alone is sufficient. The image is normalized for visual inspection before it is returned to the client.",
     inputSchema: {
+      shell_id: shellIdSchema,
       path: z.string().describe(
-        "Path to a PNG, JPEG, GIF, or WebP image. Relative paths resolve from the current workspace; absolute paths and ~/ home paths are supported.",
+        "Path to a PNG, JPEG, GIF, or WebP image. Relative paths resolve from the shell root; absolute paths and ~/ home paths are supported.",
       ),
     },
     annotations: {
@@ -222,5 +225,8 @@ export function registerReadImageTool(server: McpServer, cwd: string, commandPat
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async (input, extra) => recordToolCall("read_image", input, () => readImage(cwd, input.path, extra.signal, commandPath)));
+  }, async (input, extra) => recordToolCall("read_image", input, () => {
+    const cwd = shells.require(input.shell_id).cwd;
+    return readImage(cwd, input.path, extra.signal, commandPath);
+  }));
 }

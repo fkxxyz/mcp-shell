@@ -20,6 +20,7 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Local loopback mode without built-in OAuth
 - Remote OAuth-style authorization with PKCE
 - Streamable HTTP MCP transport
+- Persistent Shell execution contexts
 - Persistent token state
 - Tool-call logging
 - Guardrails for broad filesystem searches
@@ -79,7 +80,6 @@ Optional values include:
 
 ```env
 PORT=3000
-MCP_WORKDIR=~
 OAUTH_REDIRECT_URI=
 OAUTH_REDIRECT_URI_ALLOWLIST=
 TOOL_LOG_DIR=
@@ -87,8 +87,6 @@ TOOL_LOG_MAX_CALLS=10000
 ```
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
-
-`MCP_WORKDIR` sets the workspace used by relative shell, file, patch, image, and LSP operations. It defaults to the current user's home directory, so tool behavior does not depend on the directory from which the mcp-shell server process was started. Relative configured paths are resolved from `~/.mcp-shell/`.
 
 ## Run
 
@@ -128,6 +126,12 @@ Relevant endpoints:
 
 The remote authorization model is intentionally simple: one configured OAuth client and one owner password.
 
+### Create a Shell
+
+Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. If the directory contains a root `AGENTS.md`, those project instructions are included automatically.
+
+Pass that `shell_id` on subsequent operations and prefer paths relative to the Shell root. Creating another Shell for the same directory is valid and produces a distinct execution context.
+
 ## Local state
 
 `mcp-shell` keeps its runtime state under:
@@ -141,6 +145,7 @@ Important files and directories include:
 ```text
 ~/.mcp-shell/env
 ~/.mcp-shell/state.json
+~/.mcp-shell/shells.db
 ~/.mcp-shell/tool-logs/
 ~/.mcp-shell/bin/
 ```
@@ -180,6 +185,7 @@ mcp-shell.ts       entry point
 src/auth/          OAuth and token handling
 src/http/          HTTP application
 src/mcp/           MCP server and session handling
+src/shell*.ts      durable Shell state and bootstrap
 src/tools/         MCP tool implementations
 src/tool-logs.ts   tool-call logging
 bin/               command wrappers

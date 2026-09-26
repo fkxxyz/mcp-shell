@@ -1,5 +1,5 @@
 ---
-summary: "Decomposes mcp-shell into configuration, HTTP/auth, MCP session, tool, command-policy, and logging responsibilities."
+summary: "Decomposes mcp-shell into configuration, HTTP/auth, MCP session, durable Shell, tool, command-policy, and logging responsibilities."
 viewpoint: static
 stakeholders:
   - architect
@@ -38,10 +38,9 @@ Owns:
 - parsing the server env file;
 - optional shell-environment sourcing;
 - command-path construction;
-- resolution of the MCP tool workspace;
 - validation of required server configuration.
 
-`AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings. The shared configuration contains an explicit tool workspace (`MCP_WORKDIR`), resolved independently from the server process working directory. If it is not configured, the workspace defaults to the current user's home directory.
+`AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings. Shell roots are runtime data created through `create_shell`, not server configuration.
 
 ## HTTP and Authorization (`src/http/`, `src/auth/`)
 
@@ -65,6 +64,14 @@ In the local profile, this block is not on the `/mcp` request path; in remote pr
 
 `createMcpServer` owns server construction and delegates tool registration.
 
+## Durable Shell State (`src/shell.ts`, `src/shell-store.ts`)
+
+`ShellStore` owns `~/.mcp-shell/shells.db`. Shell rows are addressed directly by integer `shell_id`; the store does not load or enumerate all Shells. SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` makes committed IDs monotonically increasing and never reused within one mcp-shell installation.
+
+`create_shell` requires an accessible absolute directory, reads a root `AGENTS.md` when present, commits the Shell, and returns its ID plus concise bootstrap instructions. The `AGENTS.md` contents are returned to the agent but are not copied into the database.
+
+A Shell is independent from an MCP session and from project identity. Multiple Shells may have the same `cwd`; each remains a distinct durable execution context. There is no MCP operation to list or close Shells.
+
 ## Host Tools (`src/tools/`)
 
 Tool registration is modular:
@@ -74,7 +81,7 @@ Tool registration is modular:
 - `read-image.ts`: image inspection;
 - `lsp.ts`: definition, reference, symbol, diagnostic, and rename operations.
 
-These tools receive the configured MCP tool workspace and, where relevant, command-path policy. Relative shell and filesystem operations are rooted in that workspace. The workspace is independent from the server process working directory, so changing how or where `mcp-shell` is launched does not change tool path semantics. They do not decide network exposure or authorization.
+Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root relative operations at that Shell's `cwd`. An unknown ID is rejected instead of falling back to process or server working directory. Tools do not decide network exposure or authorization.
 
 ## Command Policy (`src/command-path.ts`, `bin/`)
 
@@ -88,8 +95,9 @@ Owns asynchronous call context and per-call persistence. Complete call payloads 
 
 ```text
 main -> config + http/app
-http/app -> auth + mcp
-mcp -> tools
+http/app -> auth + mcp + shell-store
+mcp -> tools + shell-store
+tools -> shell-store
 basic/lsp -> command-path
 tools -> tool-logs
 ```

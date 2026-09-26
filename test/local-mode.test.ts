@@ -9,20 +9,20 @@ import { listenHostForMode, type LocalAppConfig, type RemoteAppConfig } from "..
 import { createApp } from "../src/http/app.js";
 import { makeConfig } from "./helpers.js";
 
-function makeLocalConfig(): LocalAppConfig {
+function makeLocalConfig(configDir: string): LocalAppConfig {
   return {
     mode: "local",
     port: 0,
-    workdir: "/unused/workdir",
     commandPath: {
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",
     },
     paths: {
-      configDir: "/unused",
-      envFile: "/unused/env",
+      configDir,
+      envFile: join(configDir, "env"),
       shellEnvFile: null,
-      stateFile: "/unused/state.json",
+      stateFile: join(configDir, "state.json"),
+      shellsDbFile: join(configDir, "shells.db"),
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",
     },
@@ -50,10 +50,12 @@ async function close(server: Server): Promise<void> {
 }
 
 test("local mode binds loopback, omits OAuth routes, and serves /mcp without bearer auth", async (t) => {
-  const ctx = await listen(makeLocalConfig());
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-local-mode-test-"));
+  const ctx = await listen(makeLocalConfig(dir));
   t.after(async () => {
     await close(ctx.server);
     await ctx.runtime.close();
+    await rm(dir, { recursive: true, force: true });
   });
 
   assert.equal(ctx.address.address, "127.0.0.1");
@@ -79,6 +81,7 @@ test("remote mode keeps all-interface binding and bearer-protected /mcp", async 
       ...base.paths,
       configDir: dir,
       stateFile: join(dir, "state.json"),
+      shellsDbFile: join(dir, "shells.db"),
     },
   };
   const ctx = await listen(config);

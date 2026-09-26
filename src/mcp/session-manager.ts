@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { CommandPathPolicy } from "../command-path.js";
+import type { ShellStore } from "../shell-store.js";
 import { createMcpServer } from "./server.js";
 
 export class McpSessionManager {
   private readonly transports = new Map<string, StreamableHTTPServerTransport>();
 
   constructor(
-    private readonly cwd: string,
+    private readonly shells: ShellStore,
     private readonly commandPath: CommandPathPolicy,
   ) {}
 
@@ -37,7 +38,7 @@ export class McpSessionManager {
       if (id) this.transports.delete(id);
     };
 
-    const server = createMcpServer(this.cwd, this.commandPath);
+    const server = createMcpServer(this.shells, this.commandPath);
     await server.connect(transport);
     return transport;
   }

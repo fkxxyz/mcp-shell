@@ -27,6 +27,7 @@ facets:
 | Tunnel profile | Deployment arrangement in which a trusted tunnel client forwards remote MCP traffic to local-mode mcp-shell; not a separate mcp-shell mode. |
 | Host authority | Filesystem, process, command, and other OS permissions inherited from the user running mcp-shell. |
 | MCP session | A Streamable HTTP transport session identified by `mcp-session-id` and held in process memory. |
+| Shell | A durable execution-state handle identified by integer `shell_id`. Its current state includes `cwd`; it survives MCP session and process lifetime and is not project identity. |
 | OAuth state | Authorization codes, access tokens, and refresh tokens managed by the built-in remote-mode authorization service. |
 | Tool log | Best-effort persisted record of a registered tool invocation, its input, output/error, timing, and available session/actor context. |
 | Command wrapper | Repository executable placed early in PATH to alter default command behavior, such as bounding broad searches. |

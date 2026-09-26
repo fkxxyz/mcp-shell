@@ -21,7 +21,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Type } from "typebox";
 import { z } from "zod";
 import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import type { ShellStore } from "../shell-store.js";
 import { recordToolCall } from "../tool-logs.js";
+import { shellIdSchema } from "./shell.js";
 
 const DEFAULT_MAX_REFERENCES = 200
 const DEFAULT_MAX_SYMBOLS = 200
@@ -1963,29 +1965,29 @@ function errorText(error: unknown): ToolTextResult {
   return textResult(`Error: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-export function registerLspTools(server: McpServer, cwd: string, commandPath: CommandPathPolicy) {
+export function registerLspTools(server: McpServer, shells: ShellStore, commandPath: CommandPathPolicy) {
   const schemas: Record<string, Record<string, z.ZodType>> = {
     lsp_goto_definition: {
-      filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
+      shell_id: shellIdSchema, filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
     },
     lsp_find_references: {
-      filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
+      shell_id: shellIdSchema, filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
       includeDeclaration: z.boolean().optional(),
     },
     lsp_symbols: {
-      filePath: z.string(), scope: z.enum(["document", "workspace"]).optional(),
+      shell_id: shellIdSchema, filePath: z.string(), scope: z.enum(["document", "workspace"]).optional(),
       query: z.string().optional(), limit: z.number().int().positive().optional(),
     },
     lsp_diagnostics: {
-      filePath: z.string().optional(), directory: z.string().optional(),
+      shell_id: shellIdSchema, filePath: z.string().optional(), directory: z.string().optional(),
       severity: z.enum(["error", "warning", "information", "hint", "all"]).optional(),
       extension: z.string().optional(),
     },
     lsp_prepare_rename: {
-      filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
+      shell_id: shellIdSchema, filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
     },
     lsp_rename: {
-      filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0), newName: z.string(),
+      shell_id: shellIdSchema, filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0), newName: z.string(),
     },
   };
 
@@ -2009,7 +2011,9 @@ export function registerLspTools(server: McpServer, cwd: string, commandPath: Co
           ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
           : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       }, async (params, extra) => recordToolCall(config.name, params, async () => {
-        const result = await config.execute("mcp", params, extra.signal, undefined, { cwd });
+        const cwd = shells.require(params.shell_id as number).cwd;
+        const { shell_id: _shellId, ...toolParams } = params;
+        const result = await config.execute("mcp", toolParams, extra.signal, undefined, { cwd });
         const text = result.content
           .filter((item: { type: string }) => item.type === "text")
           .map((item: { text?: string }) => item.text ?? "")

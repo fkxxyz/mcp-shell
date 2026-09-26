@@ -48,6 +48,8 @@ It is intentionally not a general identity platform.
 - OAuth state persists to a local JSON file and is also held in process memory.
 - MCP transports are process-local and keyed by MCP session ID.
 - Restarting the process terminates active MCP sessions.
+- Shell state persists in local SQLite storage and is addressed by monotonically increasing `shell_id`; committed IDs are never reused within one installation.
+- Shell lookup is by ID. The runtime does not load or enumerate the complete Shell history.
 - Multiple mcp-shell processes do not coordinate session or token mutation.
 
 ## Configuration

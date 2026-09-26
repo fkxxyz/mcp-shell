@@ -51,8 +51,14 @@ User overrides are higher precedence than repository wrappers and `--unsafe` dis
 
 Control: document wrappers as guardrails rather than security enforcement. Their purpose is to prevent accidental expensive scans, not to constrain an authorized shell caller.
 
-## Session State Is Ephemeral
+## MCP Session State Is Ephemeral
 
-Process restart ends all MCP sessions while OAuth access tokens may survive in persisted state.
+Process restart ends all MCP sessions while durable Shell state and OAuth access tokens may survive in persisted state.
 
-Control: clients must reinitialize MCP sessions after reconnect. Do not infer session continuity from token continuity.
+Control: clients must reinitialize MCP sessions after reconnect. Do not infer MCP session continuity from Shell or token continuity.
+
+## Shell History Grows Monotonically
+
+Shell IDs are never reused and there is intentionally no list or close operation, so `shells.db` grows with created Shells.
+
+Control: keep each Shell row compact and use indexed point lookup by ID so runtime cost does not scale with total history. Reassess retention only if persistent disk growth becomes material.

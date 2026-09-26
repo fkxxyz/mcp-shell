@@ -38,15 +38,21 @@ A trusted outbound tunnel reuses local mode rather than introducing another mcp-
 
 ## Single-Process Composition
 
-Express, OAuth services, persisted authorization state, MCP session management, and tool registration live in one process. This keeps ownership and shutdown behavior explicit and matches the intended personal-host deployment scale.
+Express, OAuth services, persisted authorization state, durable Shell state, MCP session management, and tool registration live in one process. This keeps ownership and shutdown behavior explicit and matches the intended personal-host deployment scale.
 
 ## Separate Protocol from Tools
 
 `src/mcp/` owns MCP server/session behavior. `src/tools/` owns concrete host capabilities. Tool modules register against `McpServer` and do not own HTTP exposure or OAuth.
 
+## Durable Shell Execution Context
+
+MCP sessions are transport state. Shells are durable execution-state handles for agents. `create_shell` assigns a monotonically increasing `shell_id` to an absolute root directory; subsequent host operations resolve relative paths from that Shell. Multiple Shells may use the same root while remaining distinct execution contexts.
+
+Shells are intentionally not enumerable or closable through MCP. An agent creates a Shell for its own session and retains the returned ID. The abstraction can grow with future Shell-scoped tool state without coupling that state to MCP transport lifetime.
+
 ## Local Persistence for Local Authority
 
-OAuth token state and tool logs live under `~/.mcp-shell/`. The design avoids a database or distributed coordinator because the system is intentionally one host and one process.
+OAuth token state, durable Shell state, and tool logs live under `~/.mcp-shell/`. OAuth state remains JSON; Shell state uses SQLite because Shell count grows monotonically and access is by `shell_id`, avoiding whole-history loads or rewrites. The system still assumes one host and does not introduce a distributed coordinator.
 
 ## Guardrails, Not Sandboxing
 
