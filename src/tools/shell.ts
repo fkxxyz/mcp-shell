@@ -9,7 +9,7 @@ export const shellIdSchema = z.number().int().positive().describe("Shell ID retu
 export function registerShellTool(server: McpServer, shells: ShellStore) {
   return server.registerTool("create_shell", {
     title: "Create Shell",
-    description: "Reuse an existing valid shell rooted at the required directory when available; otherwise create a persistent shell there.",
+    description: "Create a persistent shell rooted at the given directory. Reuse an existing shell when its cwd matches the required working directory; create a new shell only when the working directory changes. Returns the shell ID and instructions for using it.",
     inputSchema: {
       cwd: z.string().describe("Absolute directory path for the shell root"),
     },
