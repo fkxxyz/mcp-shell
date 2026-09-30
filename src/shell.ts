@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ShellStore } from "./shell-store.js";
 
@@ -8,7 +9,26 @@ export type CreateShellResult = {
   instructions: string;
 };
 
-export async function createShell(store: ShellStore, cwdInput: string): Promise<CreateShellResult> {
+type CreateShellOptions = {
+  globalAgentsPath?: string | null;
+};
+
+async function readAgentsFile(path: string): Promise<string | null> {
+  try {
+    const agentsStat = await stat(path);
+    if (!agentsStat.isFile()) throw new Error(`AGENTS.md is not a file: ${path}`);
+    return await readFile(path, "utf8");
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export async function createShell(
+  store: ShellStore,
+  cwdInput: string,
+  options: CreateShellOptions = {},
+): Promise<CreateShellResult> {
   if (!isAbsolute(cwdInput)) throw new Error("cwd must be an absolute path");
 
   const cwd = resolve(cwdInput);
@@ -21,24 +41,28 @@ export async function createShell(store: ShellStore, cwdInput: string): Promise<
   }
   if (!cwdStat.isDirectory()) throw new Error(`Shell cwd is not a directory: ${cwd}`);
 
-  const agentsPath = join(cwd, "AGENTS.md");
-  let agentsMd: string | null = null;
-  try {
-    const agentsStat = await stat(agentsPath);
-    if (!agentsStat.isFile()) throw new Error(`AGENTS.md is not a file: ${agentsPath}`);
-    agentsMd = await readFile(agentsPath, "utf8");
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw error;
-  }
+  const globalAgentsPath = options.globalAgentsPath === undefined
+    ? join(homedir(), ".agents", "AGENTS.md")
+    : options.globalAgentsPath;
+  const projectAgentsPath = join(cwd, "AGENTS.md");
+  const globalAgentsMd = globalAgentsPath === null
+    ? null
+    : await readAgentsFile(globalAgentsPath);
+  const projectAgentsMd = globalAgentsPath !== null && resolve(globalAgentsPath) === projectAgentsPath
+    ? null
+    : await readAgentsFile(projectAgentsPath);
 
   const shell = store.create(cwd);
   const base = `Shell ${shell.id} is rooted at ${cwd}.\nUse this shell for subsequent operations and prefer relative paths.`;
-  const project = agentsMd === null
+  const global = globalAgentsMd === null
     ? ""
-    : `\n\nProject instructions from AGENTS.md:\n\n${agentsMd.trimEnd()}`;
+    : `\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n${globalAgentsMd.trimEnd()}`;
+  const project = projectAgentsMd === null
+    ? ""
+    : `\n\nProject instructions from AGENTS.md:\n\n${projectAgentsMd.trimEnd()}`;
 
   return {
     shellId: shell.id,
-    instructions: base + project,
+    instructions: base + global + project,
   };
 }

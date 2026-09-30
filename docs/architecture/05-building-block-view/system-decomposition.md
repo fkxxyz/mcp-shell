@@ -68,7 +68,7 @@ In the local profile, this block is not on the `/mcp` request path; in remote pr
 
 `ShellStore` owns `~/.mcp-shell/shells.db`. Shell rows are addressed directly by integer `shell_id`; the store does not load or enumerate all Shells. SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` makes committed IDs monotonically increasing and never reused within one mcp-shell installation.
 
-`create_shell` requires an accessible absolute directory, reads a root `AGENTS.md` when present, commits the Shell, and returns its ID plus concise bootstrap instructions. The `AGENTS.md` contents are returned to the agent but are not copied into the database.
+`create_shell` requires an accessible absolute directory, reads `~/.agents/AGENTS.md` as global guidance when present, then reads a root `AGENTS.md` as project guidance when present, commits the Shell, and returns its ID plus concise bootstrap instructions. Global guidance is returned before project guidance so the more specific project rules can override it. `AGENTS.md` contents are returned to the agent but are not copied into the database.
 
 A Shell is independent from an MCP session and from project identity. Multiple Shells may have the same `cwd`; each remains a distinct durable execution context. There is no MCP operation to list or close Shells.
 

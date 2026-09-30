@@ -128,7 +128,7 @@ The remote authorization model is intentionally simple: one configured OAuth cli
 
 ### Create a Shell
 
-Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. If the directory contains a root `AGENTS.md`, those project instructions are included automatically.
+Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. If `~/.agents/AGENTS.md` exists, those global instructions are included first. If the directory contains a root `AGENTS.md`, those project instructions follow so the more specific project guidance has precedence.
 
 Pass that `shell_id` on subsequent operations and prefer paths relative to the Shell root. Creating another Shell for the same directory is valid and produces a distinct execution context.
 

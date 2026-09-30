@@ -42,7 +42,7 @@ test("createShell returns concise bootstrap instructions without AGENTS.md", asy
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    const result = await createShell(store, project);
+    const result = await createShell(store, project, { globalAgentsPath: null });
     assert.equal(
       result.instructions,
       `Shell ${result.shellId} is rooted at ${project}.\nUse this shell for subsequent operations and prefer relative paths.`,
@@ -62,10 +62,33 @@ test("createShell appends root AGENTS.md to bootstrap instructions", async () =>
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    const result = await createShell(store, project);
+    const result = await createShell(store, project, { globalAgentsPath: null });
     assert.equal(
       result.instructions,
       `Shell ${result.shellId} is rooted at ${project}.\nUse this shell for subsequent operations and prefer relative paths.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nRun tests.`,
+    );
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("createShell returns global AGENTS.md before project AGENTS.md", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-global-agents-test-"));
+  const project = join(dir, "project");
+  const globalDir = join(dir, ".agents");
+  const globalAgentsPath = join(globalDir, "AGENTS.md");
+  await mkdir(project);
+  await mkdir(globalDir);
+  await writeFile(globalAgentsPath, "# Global rules\n\nGlobal first.\n", "utf8");
+  await writeFile(join(project, "AGENTS.md"), "# Repository rules\n\nProject second.\n", "utf8");
+  const store = await ShellStore.open(dir, join(dir, "shells.db"));
+
+  try {
+    const result = await createShell(store, project, { globalAgentsPath });
+    assert.equal(
+      result.instructions,
+      `Shell ${result.shellId} is rooted at ${project}.\nUse this shell for subsequent operations and prefer relative paths.\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n# Global rules\n\nGlobal first.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nProject second.`,
     );
   } finally {
     store.close();
@@ -80,9 +103,9 @@ test("createShell rejects invalid roots before allocating a shell", async () => 
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    await assert.rejects(() => createShell(store, "relative/path"), /cwd must be an absolute path/);
-    await assert.rejects(() => createShell(store, join(dir, "missing")), /Cannot access shell cwd/);
-    const first = await createShell(store, project);
+    await assert.rejects(() => createShell(store, "relative/path", { globalAgentsPath: null }), /cwd must be an absolute path/);
+    await assert.rejects(() => createShell(store, join(dir, "missing"), { globalAgentsPath: null }), /Cannot access shell cwd/);
+    const first = await createShell(store, project, { globalAgentsPath: null });
     assert.equal(first.shellId, 1);
   } finally {
     store.close();
@@ -98,9 +121,9 @@ test("createShell rejects a non-file AGENTS.md before allocation", async () => {
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    await assert.rejects(() => createShell(store, project), /AGENTS\.md is not a file/);
+    await assert.rejects(() => createShell(store, project, { globalAgentsPath: null }), /AGENTS\.md is not a file/);
     await rm(join(project, "AGENTS.md"), { recursive: true });
-    const first = await createShell(store, project);
+    const first = await createShell(store, project, { globalAgentsPath: null });
     assert.equal(first.shellId, 1);
   } finally {
     store.close();
