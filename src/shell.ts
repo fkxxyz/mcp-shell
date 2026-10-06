@@ -53,7 +53,7 @@ export async function createShell(
     : await readAgentsFile(projectAgentsPath);
 
   const shell = store.create(cwd);
-  const base = `Shell ${shell.id} is rooted at ${cwd}.\nUse this shell for subsequent operations and prefer relative paths.`;
+  const base = `Shell ${shell.id} is rooted at ${cwd}.\n\nKeep using shell ID ${shell.id} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${shell.id}.\n\nPrefer relative paths.`;
   const global = globalAgentsMd === null
     ? ""
     : `\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n${globalAgentsMd.trimEnd()}`;

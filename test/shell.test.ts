@@ -45,7 +45,7 @@ test("createShell returns concise bootstrap instructions without AGENTS.md", asy
     const result = await createShell(store, project, { globalAgentsPath: null });
     assert.equal(
       result.instructions,
-      `Shell ${result.shellId} is rooted at ${project}.\nUse this shell for subsequent operations and prefer relative paths.`,
+      `Shell ${result.shellId} is rooted at ${project}.\n\nKeep using shell ID ${result.shellId} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${result.shellId}.\n\nPrefer relative paths.`,
     );
     assert.equal(store.require(result.shellId).cwd, project);
   } finally {
@@ -65,7 +65,7 @@ test("createShell appends root AGENTS.md to bootstrap instructions", async () =>
     const result = await createShell(store, project, { globalAgentsPath: null });
     assert.equal(
       result.instructions,
-      `Shell ${result.shellId} is rooted at ${project}.\nUse this shell for subsequent operations and prefer relative paths.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nRun tests.`,
+      `Shell ${result.shellId} is rooted at ${project}.\n\nKeep using shell ID ${result.shellId} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${result.shellId}.\n\nPrefer relative paths.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nRun tests.`,
     );
   } finally {
     store.close();
@@ -88,7 +88,7 @@ test("createShell returns global AGENTS.md before project AGENTS.md", async () =
     const result = await createShell(store, project, { globalAgentsPath });
     assert.equal(
       result.instructions,
-      `Shell ${result.shellId} is rooted at ${project}.\nUse this shell for subsequent operations and prefer relative paths.\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n# Global rules\n\nGlobal first.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nProject second.`,
+      `Shell ${result.shellId} is rooted at ${project}.\n\nKeep using shell ID ${result.shellId} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${result.shellId}.\n\nPrefer relative paths.\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n# Global rules\n\nGlobal first.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nProject second.`,
     );
   } finally {
     store.close();
