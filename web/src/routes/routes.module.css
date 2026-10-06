@@ -89,6 +89,13 @@ a.listRow:hover {
   gap: var(--space-1);
 }
 
+.callInvocation {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .listRow small,
 .rowMeta {
   color: var(--text-muted);

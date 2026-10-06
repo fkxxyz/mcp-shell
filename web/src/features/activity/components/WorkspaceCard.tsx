@@ -3,6 +3,7 @@ import type { ToolCallSummaryDto } from "../../../../../src/contracts/activity";
 import { basename, formatClock, formatDuration, formatRelativeTime } from "../../../lib/format";
 import type { ActivityWorkspaceView } from "../activity-model";
 import styles from "../activity.module.css";
+import { formatToolCall } from "../format-tool-call";
 
 export function WorkspaceCard({
   workspace,
@@ -56,10 +57,11 @@ export function WorkspaceCard({
 }
 
 function CallRow({ call }: { call: ToolCallSummaryDto }) {
+  const invocation = formatToolCall(call);
   const body = (
     <>
       <span className={styles.callTime}>{formatClock(call.started_at)}</span>
-      <span className={styles.callTool}>{call.tool}</span>
+      <span className={styles.callInvocation} title={invocation}>{invocation}</span>
       <span className={styles.callStatus} data-status={call.status}>{statusText(call)}</span>
     </>
   );

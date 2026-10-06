@@ -148,11 +148,12 @@ a.callRow:hover {
   font-size: 0.78rem;
 }
 
-.callTool {
+.callInvocation {
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: 0.82rem;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .callStatus {

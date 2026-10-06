@@ -8,6 +8,7 @@ export type ToolCallIdentity = {
   tool: string;
   shellId?: number;
   cwd?: string;
+  inputPreview?: Record<string, unknown>;
 };
 
 export type RunningToolCall = ToolCallIdentity & {

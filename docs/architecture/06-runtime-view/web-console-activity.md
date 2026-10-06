@@ -53,13 +53,14 @@ For a normal Shell-scoped tool:
 
 1. the MCP tool handler enters the shared Shell-aware invocation helper;
 2. ShellStore resolves the requested shell_id;
-3. ToolCallRecorder creates the call identity and publishes tool_call.started;
-4. ActivityTracker updates its workspace projection before subscriber fan-out;
-5. the tool executes from the resolved Shell root;
-6. ToolCallRecorder builds the final success or error record;
-7. ToolLogStore attempts durable persistence;
-8. ToolCallRecorder publishes tool_call.finished with payload availability reflecting persistence outcome; and
-9. the original tool result or original tool error is returned to the MCP client.
+3. ToolCallRecorder creates the call identity and a bounded, tool-agnostic input preview;
+4. ToolCallRecorder publishes tool_call.started with that preview;
+5. ActivityTracker updates its workspace projection before subscriber fan-out;
+6. the tool executes from the resolved Shell root;
+7. ToolCallRecorder builds the final success or error record with the complete input;
+8. ToolLogStore attempts durable persistence;
+9. ToolCallRecorder publishes tool_call.finished with the same preview and payload availability reflecting persistence outcome; and
+10. the original tool result or original tool error is returned to the MCP client.
 
 If Shell lookup fails, the failed invocation is still observable with its requested shell_id and no resolved workspace cwd.
 
@@ -94,6 +95,8 @@ When a workspace or Shell history page is opened:
 
 The browser follows returned cursors with an explicit Load more action so bounded API pages do not silently hide older retained history. Cursors are returned unchanged to the API and are never decoded by browser code.
 
+The browser formats summaries as function-style invocations from the bounded preview. One feature-local formatter owns argument priority and value compaction for both Activity cards and Shell history. Unknown argument names remain visible after known prioritized names; the backend does not encode tool-specific presentation semantics.
+
 Completed SSE events invalidate affected TanStack Query entries for Shell history and workspace Shell inventory. Those queries refetch authoritative history rather than having the live feed duplicate pagination or insertion rules.
 
 The live stream never carries full payloads by default.
@@ -109,7 +112,7 @@ At process startup:
 3. compatible recent entries seed ActivityTracker; and
 4. HTTP/MCP serving starts with that recent projection available.
 
-Old index entries lacking workspace identity remain valid log records but are not decompressed solely to rebuild the workspace projection.
+The lightweight index does not persist input previews, because its current append-only lifetime can exceed retained payload lifetime. Restart-restored summaries therefore may format as `tool_name()` until new live calls populate previews. Old index entries lacking workspace identity remain valid log records and retained payloads are not decompressed solely to rebuild workspace identity or previews.
 
 Running calls are process-local and disappear on restart. Persisted completed calls and durable Shells remain.
 

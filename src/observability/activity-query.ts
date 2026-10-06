@@ -115,6 +115,7 @@ export function toApiSummary(call: ToolCallSummary): ToolCallSummaryDto {
     shell_id: call.shellId ?? null,
     cwd: call.cwd ?? null,
     tool: call.tool,
+    input_preview: call.inputPreview ?? null,
     started_at: new Date(call.startedAt).toISOString(),
     finished_at: call.finishedAt == null ? null : new Date(call.finishedAt).toISOString(),
     duration_ms: call.durationMs ?? null,

@@ -131,6 +131,7 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   const readCall = allCalls.items.find((call: any) => call.tool === "read");
   assert.ok(readCall);
   assert.equal(readCall.cwd, project);
+  assert.deepEqual(readCall.input_preview, { shell_id: shellId, path: "hello.txt" });
   assert.equal(readCall.payload_available, true);
 
   const detailResponse = await fetch(
@@ -160,6 +161,7 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   }
   assert.match(received, /event: snapshot/);
   assert.ok(received.includes(project));
+  assert.ok(received.includes("input_preview"));
   controller.abort();
   await reader.cancel().catch(() => {});
 });

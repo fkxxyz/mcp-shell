@@ -33,6 +33,7 @@ test("tool logs preserve complete calls, shell identity, and activity summaries"
       assert.equal(firstIndex[0].session, "session-1");
       assert.equal(firstIndex[0].actor, "actor-1");
       assert.equal(firstIndex[0].status, "success");
+      assert.equal("input_preview" in firstIndex[0], false, "input previews must not outlive payload retention in the append-only index");
 
       const firstPayloadPath = join(dir, firstIndex[0].file);
       const firstPayload = JSON.parse(gunzipSync(await readFile(firstPayloadPath)).toString("utf8"));
@@ -44,6 +45,7 @@ test("tool logs preserve complete calls, shell identity, and activity summaries"
       assert.equal(snapshot.workspaces[0]?.cwd, "/workspace");
       assert.equal(snapshot.workspaces[0]?.recentCalls[0]?.tool, "bash");
       assert.equal("input" in (snapshot.workspaces[0]?.recentCalls[0] ?? {}), false);
+      assert.deepEqual(snapshot.workspaces[0]?.recentCalls[0]?.inputPreview, input);
 
       await assert.rejects(
         () => recorder.run({ tool: "edit", input: { path: "a.ts" }, cwd: "/workspace" }, async () => {

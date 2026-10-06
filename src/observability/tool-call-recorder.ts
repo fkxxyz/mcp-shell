@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { ActivityTracker } from "./activity-tracker.js";
+import { createInputPreview } from "./input-preview.js";
 import type {
   FinishedToolCallSummary,
   ToolCallRecord,
@@ -48,12 +49,14 @@ export class ToolCallRecorder {
     const sequence = ++this.sequence;
     const startedAt = Date.now();
     const context = contextStorage.getStore();
+    const inputPreview = this.createInputPreviewSafely(meta.input);
 
     this.publishStarted({
       id,
       tool: meta.tool,
       shellId: meta.shellId,
       cwd: meta.cwd,
+      inputPreview,
       startedAt,
     });
 
@@ -85,6 +88,7 @@ export class ToolCallRecorder {
         tool: meta.tool,
         shellId: record.shell_id,
         cwd: record.cwd,
+        inputPreview,
         startedAt,
         finishedAt,
         durationMs: finishedAt - startedAt,
@@ -122,6 +126,7 @@ export class ToolCallRecorder {
         tool: meta.tool,
         shellId: meta.shellId,
         cwd: meta.cwd,
+        inputPreview,
         startedAt,
         finishedAt,
         durationMs: finishedAt - startedAt,
@@ -150,6 +155,15 @@ export class ToolCallRecorder {
     }
   }
 
+  private createInputPreviewSafely(input: unknown): Record<string, unknown> | undefined {
+    try {
+      return createInputPreview(input);
+    } catch (error) {
+      console.error("Failed to create tool activity input preview:", error);
+      return undefined;
+    }
+  }
+
   private async persistSafely(record: ToolCallRecord) {
     try {
       return await this.logs.persist(record);
@@ -164,6 +178,7 @@ export class ToolCallRecorder {
     tool: string;
     shellId?: number;
     cwd?: string;
+    inputPreview?: Record<string, unknown>;
     startedAt: number;
   }): void {
     try {

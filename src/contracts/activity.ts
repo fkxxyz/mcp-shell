@@ -5,6 +5,7 @@ export type ToolCallSummaryDto = {
   shell_id: number | null;
   cwd: string | null;
   tool: string;
+  input_preview: Record<string, unknown> | null;
   started_at: string;
   finished_at: string | null;
   duration_ms: number | null;

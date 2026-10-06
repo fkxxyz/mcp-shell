@@ -51,12 +51,15 @@ This grouping is a projection only. It does not introduce a durable Workspace en
 ToolCallRecorder is the single control point for recorded tool invocation lifecycle:
 
 1. assign call ID and start time;
-2. publish the running call to ActivityTracker;
-3. execute the original tool operation;
-4. construct the final success or error record;
-5. ask ToolLogStore to persist the completed record;
-6. publish the completed state to ActivityTracker; and
-7. preserve the original tool result or original tool error.
+2. derive a bounded, tool-agnostic input preview for live activity;
+3. publish the running call to ActivityTracker;
+4. execute the original tool operation;
+5. construct the final success or error record with the complete input;
+6. ask ToolLogStore to persist the completed record;
+7. publish the completed state to ActivityTracker; and
+8. preserve the original tool result or original tool error.
+
+Input-preview construction is mechanical rather than semantic: it bounds string length, collection width, and nesting depth without knowing tool names or argument names. Preview failure is observability failure and must not alter tool semantics.
 
 Observability is best-effort with respect to host-tool semantics. Logging or activity publication failure must not convert a successful host operation into a failed tool call, and must not replace the original tool error.
 
@@ -104,7 +107,9 @@ New lightweight index entries carry enough identity for workspace activity witho
 
 Full input, output, and serialized errors remain in the gzip payload and are fetched only when a specific call is opened.
 
-Older index entries lacking shell_id or cwd remain valid log history. Startup does not decompress old payloads merely to backfill workspace identity.
+The append-only index intentionally does not persist input previews. Its metadata currently has no retirement lifecycle independent of payload retention, so storing input-derived text there would make fragments outlive the corresponding retained payload. As a consequence, summaries restored from the index after process restart may lack an input preview even while a retained payload still contains the complete input.
+
+Older index entries lacking shell_id or cwd remain valid log history. Startup does not decompress old payloads merely to backfill workspace identity or input previews.
 
 ## Bounded Startup and Runtime State
 
@@ -155,7 +160,7 @@ The live endpoint uses Server-Sent Events because delivery is server-to-browser 
 2. tool_call.started events; and
 3. tool_call.finished events.
 
-Summary events contain identity, lifecycle timestamps, status, and payload availability, not complete tool inputs or outputs.
+Summary events contain identity, lifecycle timestamps, status, payload availability, and an optional bounded input preview. They never contain complete tool inputs or outputs.
 
 ## Snapshot-to-Live Consistency
 
@@ -206,7 +211,9 @@ TanStack Query owns bounded historical reads. A completed SSE event invalidates 
 
 Shell and tool-call detail use addressable routes so refresh, browser back/forward, and copied links preserve user context. State with the same user expectation should prefer route/search state over hidden component state.
 
-Tool inputs, outputs, errors, and repository-controlled text are rendered through React text nodes. Untrusted tool content must not be interpreted as executable markup.
+The browser owns invocation presentation. A feature-local pure formatter orders preview arguments by a single global importance policy, keeps unknown arguments visible after known arguments, renders calls as `tool_name(arg=value, ...)`, and collapses structured values before CSS applies final single-line ellipsis. The backend does not know argument importance or construct presentation labels. Activity cards and Shell history share this formatter so the same summary has the same human-readable invocation in both surfaces.
+
+Tool inputs, outputs, errors, previews, and repository-controlled text are rendered through React text nodes. Untrusted tool content must not be interpreted as executable markup.
 
 ## Access and Browser Security
 

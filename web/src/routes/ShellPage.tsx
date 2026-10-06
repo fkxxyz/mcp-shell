@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { activityQueryKeys, listShellCalls } from "../features/activity/api";
+import { formatToolCall } from "../features/activity/format-tool-call";
 import { formatClock, formatDuration } from "../lib/format";
 import styles from "./routes.module.css";
 
@@ -35,10 +36,11 @@ export function ShellPage({ shellId }: { shellId: number }) {
         <section className={styles.panel}>
           <div className={styles.list}>
             {calls.map((call) => {
+              const invocation = formatToolCall(call);
               const content = (
                 <>
                   <span>
-                    <strong>{call.tool}</strong>
+                    <strong className={styles.callInvocation} title={invocation}>{invocation}</strong>
                     <small>{formatClock(call.started_at)} · {call.status}</small>
                   </span>
                   <span className={styles.rowMeta}>{formatDuration(call.duration_ms)}</span>

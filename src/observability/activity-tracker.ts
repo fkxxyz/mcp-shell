@@ -152,6 +152,7 @@ export class ActivityTracker {
       tool: call.tool,
       shellId: call.shellId ?? existing?.shellId,
       cwd: call.cwd ?? existing?.cwd,
+      inputPreview: call.inputPreview ?? existing?.inputPreview,
       startedAt: call.startedAt,
       finishedAt: call.finishedAt,
       durationMs: call.durationMs,
