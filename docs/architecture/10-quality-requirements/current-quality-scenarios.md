@@ -41,6 +41,7 @@ facets:
 | Operability | mcp-shell restarts after a Shell was created. | The existing `shell_id` still resolves to the persisted Shell root without loading the complete Shell history. |
 | Operability | The process receives SIGINT or SIGTERM while no tool is active. | New HTTP/session/tool admission stops immediately and shutdown proceeds without waiting out the three-second tool grace window. |
 | Operability | The process receives SIGINT or SIGTERM while an external-process-backed tool is active. | The admitted tool has up to three seconds to finish normally; after that it is reported as interrupted by server shutdown, its managed process tree is converged, admitted responses drain, and shared stores close only afterward. |
+| Operability | The repository-owned systemd user service is installed or updated. | Effective supervisor policy preserves main-process-first SIGTERM delivery, the application-owned tool grace window, and a finite whole-cgroup hard-stop bound; installation itself does not build, enable, start, or restart the service. |
 | Operability | A repository-wrapped broad search exceeds its normal budget. | It is terminated near the configured wall-clock budget and explains how to narrow or explicitly bypass the guardrail. |
 | Operability | A user has no public IP or server but has a supported local MCP client or trusted outbound tunnel. | No public mcp-shell listener or self-managed server is required. |
 | Maintainability | Connection mode changes. | Changes remain localized to configuration, HTTP composition, listener selection, and tests; MCP session/tool implementations remain unchanged unless their own contracts change. |
@@ -53,4 +54,4 @@ facets:
 
 ## Verification
 
-Use automated tests for configuration, authorization state, HTTP routes, MCP session behavior, durable Shell behavior, recursive/symlinked skill discovery and lazy loading, core host-tool contracts, file-mutation coordination, supervised process shutdown, command-path rules, search wrappers, and tool logging. Deployment-mode verification must include listener-address inspection, not only route-level tests.
+Use automated tests for configuration, authorization state, HTTP routes, MCP session behavior, durable Shell behavior, recursive/symlinked skill discovery and lazy loading, core host-tool contracts, file-mutation coordination, supervised process shutdown, repository-owned systemd template/install/check logic, command-path rules, search wrappers, and tool logging. Deployment-mode verification must include listener-address inspection, not only route-level tests; an installed systemd service is verified against effective manager properties with `npm run service:check`.

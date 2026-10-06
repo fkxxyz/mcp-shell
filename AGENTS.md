@@ -79,7 +79,7 @@ Install development dependencies with `npm install --include=dev`; this keeps th
 npm run dev
 ```
 
-`npm run dev` derives the Vite `/api/*` proxy target from the actual server listen address, so server `PORT` configuration remains the single development-port authority. Production uses `npm run build` followed by `npm start`; `start` runs compiled Node output and serves the built Vite assets from the same Express process. `npm run verify` is the canonical pre-commit/deployment verification gate and includes type checks, tests, Web dependency-boundary enforcement, production build, architecture validation, and whitespace validation. Project usage is documented in `README.md`.
+`npm run dev` derives the Vite `/api/*` proxy target from the actual server listen address, so server `PORT` configuration remains the single development-port authority. Production uses compiled output from `npm run build`; direct execution uses `npm start`, while user-level systemd deployment uses the repository-owned template through `npm run service:install` and validates effective supervisor policy with `npm run service:check`. `npm run verify` is the canonical pre-commit/deployment verification gate and includes type checks, tests, Web dependency-boundary enforcement, production build, architecture validation, and whitespace validation. Project usage is documented in `README.md`.
 
 ## Current Boundaries
 
@@ -90,4 +90,4 @@ npm run dev
 - Token state is shared through a local JSON file, not a database or distributed store. Multiple server instances are not coordinated.
 - The Web Console and backend are one repository, one release, one origin, and one production deployment unit; there is no independent frontend service or SSR layer.
 - The browser API is read-only. The first Web mutation requires an explicit security reassessment rather than inheriting the current Basic-auth boundary automatically.
-- There is no documented deployment automation.
+- User-level systemd lifecycle policy has a repository-owned install/check path, but production build artifacts are still updated in place rather than switched atomically as a release unit.

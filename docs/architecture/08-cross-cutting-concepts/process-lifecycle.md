@@ -49,16 +49,25 @@ The three-second window is a completion opportunity, not a delay applied to ever
 
 ## systemd Contract
 
-The recommended systemd service uses:
+The repository owns the systemd lifecycle contract through `deploy/systemd/mcp-shell.service.in`. `npm run service:install` renders only the machine-specific Node executable and compiled entrypoint into the user's service unit, then reloads the user manager; it does not build, enable, start, or restart the service. An existing unit without the mcp-shell managed marker is not replaced unless the operator explicitly supplies `--replace-existing`.
+
+The lifecycle-critical service settings are:
 
 ```ini
+Type=simple
+KillSignal=SIGTERM
 KillMode=mixed
+SendSIGKILL=yes
 TimeoutStopSec=15s
 ```
 
 `KillMode=mixed` is required for the application-owned three-second tool grace: the initial stop signal reaches only the main process, while systemd still applies its final `SIGKILL` to the whole service cgroup if the main process does not converge. `KillMode=control-group` would send the initial `SIGTERM` to tool descendants immediately and therefore bypass the application grace period.
 
 `TimeoutStopSec` is the outer failure bound, not the normal shutdown mechanism. It must remain comfortably larger than the application grace and child-process escalation windows.
+
+`Type=simple` deliberately means that successful `systemctl start` or `restart` reports process creation, not application readiness. The current architecture has no systemd-specific readiness protocol; add one only when an operator contract requires restart completion to prove listener readiness.
+
+`npm run service:check` verifies the installed managed unit, configured executable paths, pending daemon reload state, and effective lifecycle properties reported by systemd. Repository tests verify the template and installer/checker logic without operating the developer's real user service.
 
 ## Restart Semantics
 

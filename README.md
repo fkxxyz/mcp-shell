@@ -125,15 +125,20 @@ http://127.0.0.1:<PORT>/mcp
 
 In remote mode, the MCP endpoint is `<PUBLIC_BASE_URL>/mcp` and the server listens on `0.0.0.0`. `PORT` defaults to `3000` in both modes.
 
-For long-running remote deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS. When using systemd, configure the service shutdown boundary so mcp-shell owns its three-second active-tool completion window while systemd remains the final process-tree guardrail:
+For a long-running user-level systemd deployment, build first and install the repository-owned service definition:
 
-```ini
-[Service]
-KillMode=mixed
-TimeoutStopSec=15s
+```bash
+npm run build
+npm run service:install
+systemctl --user enable --now mcp-shell.service
+npm run service:check
 ```
 
-`KillMode=mixed` sends the initial stop signal only to the main process, then applies the final kill to the whole service cgroup if shutdown fails to converge. `KillMode=control-group` would terminate active tool descendants immediately and bypass mcp-shell's grace window.
+`service:install` renders the current Node executable and this checkout's `dist/server/mcp-shell.js` into the user unit, reloads systemd, and deliberately does not enable, start, or restart the service. If an older manually maintained `mcp-shell.service` already exists, review it and migrate explicitly with `npm run service:install -- --replace-existing`. The checkout used for installation remains the deployment root; reinstall the service before moving or deleting it.
+
+`service:check` verifies the installed executable paths and effective lifecycle settings, including the `KillMode=mixed` / 15-second outer stop boundary required for the application's three-second active-tool completion opportunity. `Type=simple` does not claim listener readiness when `systemctl start` or `restart` returns.
+
+For remote mode, place an HTTPS reverse proxy or equivalent trusted ingress in front of the service.
 
 ### Web Console
 
@@ -271,6 +276,8 @@ web/src/app/        React application composition and routing
 web/src/features/   feature-owned browser behavior and UI
 web/src/routes/     addressable Web Console pages
 bin/               command wrappers
+deploy/systemd/     repository-owned user-service lifecycle policy
+scripts/            development and deployment helper commands
 test/              automated tests
 dist/              generated production build output
 ```

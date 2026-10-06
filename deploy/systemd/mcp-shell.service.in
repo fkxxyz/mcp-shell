@@ -1,0 +1,17 @@
+# Managed by mcp-shell. Source: deploy/systemd/mcp-shell.service.in
+[Unit]
+Description=MCP Shell
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+ExecStart=@@NODE@@ @@ENTRYPOINT@@
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=mixed
+SendSIGKILL=yes
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=default.target
