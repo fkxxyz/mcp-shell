@@ -11,33 +11,33 @@ import type { LocalAppConfig, RemoteAppConfig } from "../src/config.js";
 import { createApp, type AppRuntime } from "../src/http/app.js";
 import { makeConfig } from "./helpers.js";
 
-const ACTIVITY_PASSWORD = "activity-test-password";
-const BASIC = `Basic ${Buffer.from(`activity:${ACTIVITY_PASSWORD}`).toString("base64")}`;
+const WEB_PASSWORD = "web-test-password";
+const BASIC = `Basic ${Buffer.from(`activity:${WEB_PASSWORD}`).toString("base64")}`;
 
-test("activity surface is absent unless ACTIVITY_PASSWORD is configured", async (t) => {
+test("Web Console and API are absent unless WEB_PASSWORD is configured", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-shell-activity-disabled-"));
   const ctx = await listen(makeLocalConfig(dir));
   t.after(() => cleanup(ctx, dir));
 
-  const response = await fetch(`${ctx.baseUrl}/activity/`);
-  assert.equal(response.status, 404);
+  assert.equal((await fetch(`${ctx.baseUrl}/console/`)).status, 404);
+  assert.equal((await fetch(`${ctx.baseUrl}/api/shells?cwd=/tmp`)).status, 404);
 });
 
-test("activity surface uses one Basic Auth boundary and security headers", async (t) => {
+test("Web Console and API share one Basic Auth boundary with scoped caching", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-shell-activity-auth-"));
-  const ctx = await listen(makeLocalConfig(dir, ACTIVITY_PASSWORD));
+  const ctx = await listen(makeLocalConfig(dir, WEB_PASSWORD));
   t.after(() => cleanup(ctx, dir));
 
-  const anonymous = await fetch(`${ctx.baseUrl}/activity/`);
+  const anonymous = await fetch(`${ctx.baseUrl}/console/`);
   assert.equal(anonymous.status, 401);
   assert.match(anonymous.headers.get("www-authenticate") ?? "", /^Basic /);
 
-  const wrong = await fetch(`${ctx.baseUrl}/activity/`, {
+  const wrong = await fetch(`${ctx.baseUrl}/console/`, {
     headers: { authorization: `Basic ${Buffer.from("activity:wrong").toString("base64")}` },
   });
   assert.equal(wrong.status, 401);
 
-  const page = await fetch(`${ctx.baseUrl}/activity/`, {
+  const page = await fetch(`${ctx.baseUrl}/console/`, {
     headers: { authorization: BASIC },
   });
   assert.equal(page.status, 200);
@@ -49,10 +49,22 @@ test("activity surface uses one Basic Auth boundary and security headers", async
   assert.match(csp, /frame-ancestors 'none'/);
   assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval/);
 
-  const api = await fetch(`${ctx.baseUrl}/activity/api/v1/shells?cwd=${encodeURIComponent("/tmp/none")}`, {
+  const deepLink = await fetch(`${ctx.baseUrl}/console/shells/42`, { headers: { authorization: BASIC } });
+  assert.equal(deepLink.status, 200);
+  assert.match(await deepLink.text(), /mcp-shell/);
+
+  const asset = await fetch(`${ctx.baseUrl}/console/assets/app-test.js`, { headers: { authorization: BASIC } });
+  assert.equal(asset.status, 200);
+  assert.match(asset.headers.get("cache-control") ?? "", /immutable/);
+
+  const missingAsset = await fetch(`${ctx.baseUrl}/console/assets/missing.js`, { headers: { authorization: BASIC } });
+  assert.equal(missingAsset.status, 404, "missing hashed assets must not fall back to index.html");
+
+  const api = await fetch(`${ctx.baseUrl}/api/shells?cwd=${encodeURIComponent("/tmp/none")}`, {
     headers: { authorization: BASIC },
   });
   assert.equal(api.status, 200);
+  assert.equal(api.headers.get("cache-control"), "no-store");
   assert.deepEqual((await api.json()).items, []);
 });
 
@@ -62,7 +74,7 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   await mkdir(project);
   await writeFile(join(project, "hello.txt"), "hello activity\n", "utf8");
 
-  const ctx = await listen(makeLocalConfig(dir, ACTIVITY_PASSWORD));
+  const ctx = await listen(makeLocalConfig(dir, WEB_PASSWORD));
 
   const client = new Client({ name: "activity-test", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(new URL(`${ctx.baseUrl}/mcp`));
@@ -82,27 +94,35 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   });
 
   const shellsResponse = await fetch(
-    `${ctx.baseUrl}/activity/api/v1/shells?cwd=${encodeURIComponent(project)}`,
+    `${ctx.baseUrl}/api/shells?cwd=${encodeURIComponent(project)}&limit=1`,
     { headers: { authorization: BASIC } },
   );
   assert.equal(shellsResponse.status, 200);
   const shells = await shellsResponse.json();
   assert.equal(shells.items[0].shell_id, shellId);
+  assert.notEqual(shells.next_cursor, String(shellId), "pagination cursors are opaque to clients");
 
   const callsResponse = await fetch(
-    `${ctx.baseUrl}/activity/api/v1/shells/${shellId}/calls`,
+    `${ctx.baseUrl}/api/shells/${shellId}/calls?limit=1`,
     { headers: { authorization: BASIC } },
   );
   assert.equal(callsResponse.status, 200);
   const calls = await callsResponse.json();
-  assert.ok(calls.items.some((call: any) => call.tool === "create_shell"));
-  const readCall = calls.items.find((call: any) => call.tool === "read");
+  assert.ok(calls.next_cursor);
+
+  const allCallsResponse = await fetch(
+    `${ctx.baseUrl}/api/shells/${shellId}/calls`,
+    { headers: { authorization: BASIC } },
+  );
+  const allCalls = await allCallsResponse.json();
+  assert.ok(allCalls.items.some((call: any) => call.tool === "create_shell"));
+  const readCall = allCalls.items.find((call: any) => call.tool === "read");
   assert.ok(readCall);
   assert.equal(readCall.cwd, project);
   assert.equal(readCall.payload_available, true);
 
   const detailResponse = await fetch(
-    `${ctx.baseUrl}/activity/api/v1/tool-calls/${readCall.id}`,
+    `${ctx.baseUrl}/api/tool-calls/${readCall.id}`,
     { headers: { authorization: BASIC } },
   );
   assert.equal(detailResponse.status, 200);
@@ -112,7 +132,7 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   assert.equal(detail.input.path, "hello.txt");
 
   const controller = new AbortController();
-  const streamResponse = await fetch(`${ctx.baseUrl}/activity/api/v1/stream`, {
+  const streamResponse = await fetch(`${ctx.baseUrl}/api/activity/stream`, {
     headers: { authorization: BASIC },
     signal: controller.signal,
   });
@@ -132,12 +152,12 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   await reader.cancel().catch(() => {});
 });
 
-test("activity Basic credentials never authorize remote /mcp", async (t) => {
+test("Web Basic credentials never authorize remote /mcp", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-shell-activity-remote-"));
   const base = makeConfig();
   const config: RemoteAppConfig = {
     ...base,
-    activityPassword: ACTIVITY_PASSWORD,
+    webPassword: WEB_PASSWORD,
     toolLogs: {
       dir: join(dir, "tool-logs"),
       maxCalls: 10_000,
@@ -166,11 +186,11 @@ test("activity Basic credentials never authorize remote /mcp", async (t) => {
   assert.match(response.headers.get("www-authenticate") ?? "", /^Bearer /);
 });
 
-function makeLocalConfig(configDir: string, activityPassword?: string): LocalAppConfig {
+function makeLocalConfig(configDir: string, webPassword?: string): LocalAppConfig {
   return {
     mode: "local",
     port: 0,
-    activityPassword,
+    webPassword,
     commandPath: {
       userBinDir: join(configDir, "user-bin"),
       repoBinDir: join(configDir, "repo-bin"),
@@ -192,7 +212,11 @@ function makeLocalConfig(configDir: string, activityPassword?: string): LocalApp
 }
 
 async function listen(config: LocalAppConfig | RemoteAppConfig) {
-  const runtime = await createApp(config);
+  const webRoot = join(config.paths.configDir, "web-fixture");
+  await mkdir(join(webRoot, "assets"), { recursive: true });
+  await writeFile(join(webRoot, "index.html"), "<!doctype html><title>mcp-shell</title><div id=\"root\"></div>", "utf8");
+  await writeFile(join(webRoot, "assets", "app-test.js"), "export {};\n", "utf8");
+  const runtime = await createApp(config, { webRoot });
   const server = await new Promise<Server>((resolve) => {
     const listening = runtime.app.listen(0, "127.0.0.1", () => resolve(listening));
   });

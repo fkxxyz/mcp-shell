@@ -2,53 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>mcp-shell activity</title>
-  <link rel="stylesheet" href="/activity/styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>mcp-shell</title>
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <div class="brand">mcp-shell</div>
-      <div class="subtitle">Tool activity</div>
-    </div>
-    <div class="connection" id="connection-status" data-state="connecting">
-      <span class="connection-dot" aria-hidden="true"></span>
-      <span id="connection-label">Connecting</span>
-    </div>
-  </header>
-
-  <main class="page">
-    <section class="activity-section" aria-labelledby="active-title">
-      <div class="section-heading">
-        <h1 id="active-title">Active</h1>
-        <span class="section-count" id="active-count">0</span>
-      </div>
-      <div id="active-list" class="workspace-list"></div>
-      <p id="active-empty" class="empty-state">No activity in the last 10 minutes.</p>
-    </section>
-
-    <section class="activity-section earlier-section" aria-labelledby="earlier-title">
-      <div class="section-heading">
-        <h1 id="earlier-title">Earlier</h1>
-        <span class="section-count" id="earlier-count">0</span>
-      </div>
-      <div id="earlier-list" class="workspace-list compact-list"></div>
-      <p id="earlier-empty" class="empty-state">No earlier activity.</p>
-    </section>
-  </main>
-
-  <dialog id="detail-dialog" class="detail-dialog">
-    <div class="dialog-header">
-      <div>
-        <div id="dialog-eyebrow" class="dialog-eyebrow"></div>
-        <h2 id="dialog-title"></h2>
-      </div>
-      <button id="dialog-close" class="icon-button" type="button" aria-label="Close">×</button>
-    </div>
-    <div id="dialog-body" class="dialog-body"></div>
-  </dialog>
-
-  <script type="module" src="/activity/js/main.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

@@ -35,6 +35,7 @@ The architectural security boundary is therefore not “an ordinary web API.” 
 4. **Standard MCP transport.** Clients interact through MCP Streamable HTTP; session and tool behavior remain independent from how the endpoint becomes reachable.
 5. **Inspectable host actions.** Tool calls are recorded without making logging failure block tool execution.
 6. **Low-friction personal use.** Local connection mode lets a user avoid a public IP address or self-managed server when using mcp-shell from the same computer or through a trusted outbound tunnel.
+7. **Evolvable operator interface.** An optional same-origin Web Console can grow beyond Activity without coupling browser structure to MCP, storage, or tool internals.
 
 ## Quality Priorities
 
@@ -56,7 +57,8 @@ In scope:
 - remote OAuth-protected access;
 - local loopback-only access;
 - optional outbound tunneling from the local host to a trusted MCP client environment;
-- local persisted OAuth state and tool-call logs.
+- local persisted OAuth state and tool-call logs; and
+- an optional Basic-authenticated, read-only Web Console and browser API.
 
 ## Non-goals
 
@@ -64,6 +66,7 @@ In scope:
 - a general-purpose OAuth provider;
 - distributed MCP session coordination;
 - containment of an already-authorized shell caller as if it were untrusted code;
+- browser mutation of host state without a separately reviewed authority model;
 - cloud hosting as a requirement for personal use.
 
 ## Connection Modes

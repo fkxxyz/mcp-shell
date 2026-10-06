@@ -15,7 +15,7 @@ export type ConnectionMode = "local" | "remote";
 type BaseAppConfig = {
   port: number;
   commandPath: CommandPathPolicy;
-  activityPassword?: string;
+  webPassword?: string;
   toolLogs: {
     dir: string;
     maxCalls: number;
@@ -84,11 +84,11 @@ export async function loadConfig(): Promise<AppConfig> {
     ? resolveConfiguredPath(process.env.TOOL_LOG_DIR, configDir)
     : join(configDir, "tool-logs");
   const toolLogMaxCalls = parsePositiveInteger(process.env.TOOL_LOG_MAX_CALLS, 10_000);
-  const activityPassword = process.env.ACTIVITY_PASSWORD || undefined;
+  const webPassword = process.env.WEB_PASSWORD || undefined;
   const common = {
     port: Number(process.env.PORT ?? 3000),
     commandPath,
-    activityPassword,
+    webPassword,
     toolLogs: { dir: toolLogDir, maxCalls: toolLogMaxCalls },
     paths: { configDir, envFile, shellEnvFile, stateFile, shellsDbFile, userBinDir, repoBinDir },
   };
@@ -144,8 +144,8 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "# Tool call history. Payloads are gzip-compressed and the oldest calls are removed by count.",
       "TOOL_LOG_DIR=",
       "TOOL_LOG_MAX_CALLS=10000",
-      "# Optional read-only activity dashboard. When blank, /activity is not mounted.",
-      "ACTIVITY_PASSWORD=",
+      "# Optional read-only Web Console. When blank, /console and /api are not mounted.",
+      "WEB_PASSWORD=",
       "# Optional shell file to source at startup for PATH and other user environment variables:",
       "SHELL_ENV_FILE=~/.shellenv",
       "",

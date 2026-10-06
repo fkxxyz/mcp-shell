@@ -41,7 +41,7 @@ host tools
 
 Remote mode binds to `0.0.0.0`, requires `PUBLIC_BASE_URL` and OAuth secrets, publishes OAuth discovery routes, and protects `/mcp` with bearer authentication.
 
-The same listener may also serve the activity dashboard at `/activity/*`. That subtree uses independent HTTP Basic authentication and read-only activity authority; its credential is not accepted by `/mcp`. Public remote use assumes HTTPS at the ingress because Basic credentials are replayable if transported in cleartext.
+The same listener may also serve the optional Web Console at `/console/*` and its read-only browser API at `/api/*`. Both namespaces use independent HTTP Basic authentication enabled by `WEB_PASSWORD`; that credential is not accepted by `/mcp`. Public remote use assumes HTTPS at the ingress because Basic credentials are replayable if transported in cleartext.
 
 ## Local
 
@@ -112,3 +112,5 @@ Tool-call payloads and activity metadata can contain host paths, commands, file 
 ## Lifecycle
 
 One process owns all MCP sessions. Restart terminates MCP sessions, while durable Shell state survives through `shells.db`. Remote OAuth token state survives through `state.json`; local mode does not initialize or require OAuth state for MCP access.
+
+Production deployment builds before restart: Vite emits `dist/web/`, TypeScript emits `dist/server/`, and the server starts with `node dist/server/mcp-shell.js`. The Web Console is not independently deployed or versioned from the backend.

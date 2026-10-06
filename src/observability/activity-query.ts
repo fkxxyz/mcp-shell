@@ -1,4 +1,11 @@
 import type { ShellStore } from "../shell-store.js";
+import type {
+  ActivitySnapshotDto,
+  ShellCallsDto,
+  ToolCallDetailDto,
+  ToolCallSummaryDto,
+  WorkspaceShellsDto,
+} from "../contracts/activity.js";
 import type { ActivitySnapshot, ActivityTracker } from "./activity-tracker.js";
 import type { ToolCallSummary } from "./tool-call.js";
 import type { ToolLogStore } from "./tool-log-store.js";
@@ -20,11 +27,11 @@ export class ActivityQuery {
     private readonly activity: ActivityTracker,
   ) {}
 
-  snapshot() {
+  snapshot(): ActivitySnapshotDto {
     return this.serializeSnapshot(this.activity.snapshot());
   }
 
-  serializeSnapshot(snapshot: ActivitySnapshot) {
+  serializeSnapshot(snapshot: ActivitySnapshot): ActivitySnapshotDto {
     return {
       server_time: new Date(snapshot.serverTime).toISOString(),
       workspaces: snapshot.workspaces.map((workspace) => ({
@@ -36,7 +43,8 @@ export class ActivityQuery {
     };
   }
 
-  listWorkspaceShells(cwd: string, limit: number, beforeId?: number) {
+  listWorkspaceShells(cwd: string, limit: number, before?: string): WorkspaceShellsDto {
+    const beforeId = before ? decodePositiveIntegerCursor(before, "shell") : undefined;
     const shells = this.shells.listByCwd(cwd, limit, beforeId);
     return {
       cwd,
@@ -46,16 +54,17 @@ export class ActivityQuery {
         created_at: new Date(shell.createdAt).toISOString(),
         last_activity_at: this.latestShellEventAt(shell.id),
       })),
-      next_cursor: shells.length === limit ? String(shells[shells.length - 1]!.id) : null,
+      next_cursor: shells.length === limit ? encodeCursor("shell", String(shells[shells.length - 1]!.id)) : null,
     };
   }
 
-  listShellCalls(shellId: number, limit: number, beforeId?: string) {
+  listShellCalls(shellId: number, limit: number, before?: string): ShellCallsDto {
     const shell = this.shells.get(shellId);
     if (!shell) {
       throw new ActivityQueryError(404, "shell_not_found", `Unknown shell_id: ${shellId}`);
     }
 
+    const beforeId = before ? decodeCursor(before, "call") : undefined;
     if (beforeId) {
       const cursor = this.activity.getCall(beforeId);
       if (!cursor || cursor.shellId !== shellId) {
@@ -71,11 +80,11 @@ export class ActivityQuery {
         created_at: new Date(shell.createdAt).toISOString(),
       },
       items: calls.map(toApiSummary),
-      next_cursor: calls.length === limit ? calls[calls.length - 1]!.id : null,
+      next_cursor: calls.length === limit ? encodeCursor("call", calls[calls.length - 1]!.id) : null,
     };
   }
 
-  async getToolCall(callId: string) {
+  async getToolCall(callId: string): Promise<ToolCallDetailDto> {
     const summary = this.activity.getCall(callId);
     if (!summary) {
       throw new ActivityQueryError(404, "tool_call_not_found", "Unknown tool call");
@@ -100,7 +109,7 @@ export class ActivityQuery {
   }
 }
 
-export function toApiSummary(call: ToolCallSummary) {
+export function toApiSummary(call: ToolCallSummary): ToolCallSummaryDto {
   return {
     id: call.id,
     shell_id: call.shellId ?? null,
@@ -112,4 +121,30 @@ export function toApiSummary(call: ToolCallSummary) {
     status: call.status,
     payload_available: call.status === "running" ? false : Boolean(call.payloadAvailable),
   };
+}
+
+function encodeCursor(kind: "shell" | "call", value: string): string {
+  return `${kind}.${Buffer.from(value, "utf8").toString("base64url")}`;
+}
+
+function decodeCursor(cursor: string, kind: "shell" | "call"): string {
+  const prefix = `${kind}.`;
+  if (!cursor.startsWith(prefix)) {
+    throw new ActivityQueryError(400, "invalid_cursor", "Cursor is invalid for this resource");
+  }
+  try {
+    const value = Buffer.from(cursor.slice(prefix.length), "base64url").toString("utf8");
+    if (!value) throw new Error("empty cursor");
+    return value;
+  } catch {
+    throw new ActivityQueryError(400, "invalid_cursor", "Cursor is malformed");
+  }
+}
+
+function decodePositiveIntegerCursor(cursor: string, kind: "shell"): number {
+  const value = Number(decodeCursor(cursor, kind));
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new ActivityQueryError(400, "invalid_cursor", "Cursor is malformed");
+  }
+  return value;
 }

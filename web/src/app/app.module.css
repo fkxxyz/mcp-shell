@@ -1,0 +1,108 @@
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brandBlock {
+  display: grid;
+  gap: 2px;
+}
+
+.brand {
+  font-weight: 760;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.nav {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.navLink {
+  display: block;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.navLink:hover,
+.navLink[aria-current="page"] {
+  color: var(--text);
+  background: var(--surface-subtle);
+}
+
+.connection {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.connectionDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.connection[data-state="live"] .connectionDot {
+  background: var(--success);
+}
+
+.connection[data-state="reconnecting"] .connectionDot {
+  background: var(--danger);
+}
+
+.main {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    padding: var(--space-3) var(--space-4);
+    flex-direction: row;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .subtitle {
+    display: none;
+  }
+
+  .nav {
+    display: flex;
+  }
+
+  .connection {
+    margin-top: 0;
+    margin-left: auto;
+  }
+}

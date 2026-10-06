@@ -105,19 +105,47 @@ Process restart ends all MCP sessions while durable Shell state and OAuth access
 
 Control: clients must reinitialize MCP sessions after reconnect. Do not infer MCP session continuity from Shell or token continuity.
 
-## Connection Semantics Have a Broad Documentation Synchronization Radius
+## Architectural Knowledge Has a Broad Manual Synchronization Radius
 
-- **Root cause:** connection-mode, tunnel, and OAuth resource semantics are intentionally projected into several architecture views and operator-facing documents, but the boundary between authoritative definition and derived explanation is not explicit enough to prevent the same rule from being restated independently.
+- **Root cause:** long-lived architecture rules are intentionally projected into several Views and operator/developer documents, but semantic authority versus audience-specific projection is not explicit enough. The same rule can therefore be restated as if several documents independently own it.
 - **Primary cost dimension:** maintainability and maintained-knowledge coherence.
-- **Current cost:** a single conceptual change to tunnel placement and OAuth resource aliases required coordinated edits across architecture constraints, context, solution strategy, building blocks, deployment, access control, the connection-mode decision record, quality scenarios, glossary, README, and agent guidance. Each edit is individually reasonable, but future changes can leave contradictory current-state claims if one projection is missed.
-- **Evidence:** the 2026-10-06 resource-alias change changed one governing connection/authentication rule and required synchronized updates across multiple architecture Views plus README and AGENTS guidance.
-- **Cost mechanism:** several documents can read as independent authorities for whether tunnels imply local mode, when remote OAuth remains active, and what resource aliases mean; synchronization relies primarily on maintainer recall rather than a clearly documented authority/projection relationship.
-- **Reachable better state:** keep the distinct Views, but make authority boundaries explicit: the connection-mode ADR owns the mode decision and rationale, access-control owns security invariants, deployment owns topology, and other maintained documents summarize or reference those authorities without redefining the rule.
-- **Governing constraint:** each long-lived connection/authentication rule has one clear semantic authority; other Views may project consequences for their audience but should not become competing definitions.
-- **Scope discovery:** when connection or authentication semantics change, inspect the decision record, access-control concept, deployment view, architecture index/navigation, README/operator guidance, AGENTS guidance, glossary, constraints, quality scenarios, and any other current-state View that describes the same rule.
-- **Repair direction:** do not collapse the architecture documentation or introduce generated prose. Incrementally reduce duplicated normative wording when these documents are next touched, and add explicit cross-references where they lower synchronization burden without harming local readability.
-- **Exit criteria:** representative connection-policy changes can identify the authoritative rule first, derived Views have clear projection roles, and changing one rule no longer requires reconciling multiple apparently authoritative definitions.
-- **Priority:** low; the synchronization cost is now observable, but the current Views serve distinct audiences and a broad documentation rewrite would cost more than the present burden.
+- **Current cost:** conceptual boundary changes require broad coordinated prose edits and create omission risk. Connection/resource-alias work previously touched many architecture Views plus README and AGENTS. The 2026-10-06 Web Console migration repeated the pattern across goals, context, strategy, decomposition, runtime, deployment, access control, observability, glossary, README, AGENTS, and a new ADR.
+- **Evidence:** two unrelated architecture changes—connection/resource identity and the Web Console boundary—both produced large documentation synchronization sets even though each had a small number of governing rules.
+- **Cost mechanism:** documents with distinct audiences also repeat normative current-state facts. Synchronization therefore relies on maintainer recall and broad search rather than a clear authority/projection relationship, so change radius grows faster than the number of actual decisions.
+- **Reachable better state:** keep distinct Views where they provide local value, but make authority boundaries explicit: ADRs own decisions/rationale, cross-cutting concepts own enduring invariants, deployment/runtime Views own consequences in their dimensions, and README/AGENTS summarize or link rather than silently becoming competing semantic authorities.
+- **Governing constraint:** each long-lived architecture rule has one identifiable semantic authority; other maintained documents may project consequences for their audience without redefining the rule.
+- **Scope discovery:** for representative architecture changes, identify the governing ADR/concept first, then inspect derived Views, README/operator guidance, AGENTS guidance, glossary, quality scenarios, and other current-state projections that mention the rule.
+- **Repair direction:** do not collapse documentation or generate prose mechanically. Incrementally replace duplicated normative wording with explicit ownership/cross-references when documents are next touched, and improve architecture navigation where it reduces search burden.
+- **Exit criteria:** representative architecture changes can identify one semantic authority before editing, derived documents have clear projection roles, and changes no longer require reconciling multiple apparently authoritative definitions of the same rule.
+- **Priority:** low; the synchronization cost is now demonstrated across multiple domains, but broad documentation restructuring would currently cost more than incremental convergence.
+
+## Production Releases Lack an Atomic Artifact Switch
+
+- **Root cause:** server and browser outputs form one logical release, but the current build writes `dist/web` and `dist/server` in place before the running service is restarted; there is no release-directory/staging boundary that makes the complete artifact set the unit of replacement.
+- **Primary cost dimension:** operability and release reliability.
+- **Current cost:** a failed or interrupted build can leave only part of the next release in `dist/`, and building while an existing service is live can temporarily expose browser assets that do not correspond to the running server. Recovery depends on rebuilding or manually restoring a known-good checkout/artifact set.
+- **Evidence:** the Web Console architecture now intentionally defines frontend and backend as one release/deployment unit, while the repository build still performs separate in-place Vite and TypeScript output steps.
+- **Cost mechanism:** release identity exists conceptually but not physically; mutable build destinations expose intermediate states and provide no natural rollback pointer.
+- **Reachable better state:** build and verify a complete release in a staging/versioned directory, then atomically switch the service-visible release pointer (or equivalent deployment root) before restart, retaining at least the previous known-good release for bounded rollback.
+- **Governing constraint:** production must observe either the complete previous release or the complete next release, never a partially constructed artifact set.
+- **Scope discovery:** include npm build scripts, `dist` layout, systemd `ExecStart`/working directory, command-wrapper paths, Web static-root resolution, deployment/restart procedure, and rollback guidance before selecting the mechanism.
+- **Repair direction:** design the smallest release-directory or atomic symlink/rename workflow that preserves the single-process deployment; do not introduce a separate frontend deployment system.
+- **Exit criteria:** interrupted/failed builds cannot alter the currently served release, successful deployment switches all server/Web artifacts as one unit, and rollback to the immediately previous release is explicit and bounded.
+- **Priority:** medium; failure probability is lower than day-to-day development costs, but the mismatch is now structural and affects every future production deployment.
+
+## Pi Tool Dependency Chain Contains Known Production Vulnerabilities
+
+- **Root cause:** the direct host-tool dependency `@earendil-works/pi-coding-agent@0.84.1` currently brings transitive versions with known security advisories, while the audit-recommended complete remediation crosses a breaking major-version boundary of the direct dependency.
+- **Primary cost dimension:** security and upgrade risk.
+- **Current cost:** `npm audit --omit=dev` reports three production vulnerabilities (one moderate, two high). The installed Pi dependency brings `brace-expansion@5.0.9` and `undici@8.9.0`; blindly applying the full audit fix would upgrade the Pi package to `1.0.4`, potentially changing host-tool behavior and adapters.
+- **Evidence:** dependency inspection on 2026-10-06 showed `@earendil-works/pi-coding-agent@0.84.1 -> minimatch@10.2.5 -> brace-expansion@5.0.9` and `-> undici@8.9.0`. npm reports complete remediation via a breaking Pi upgrade.
+- **Cost mechanism:** security exposure and remediation risk are coupled to a third-party package that supplies core file/shell tool behavior, so deferring assessment leaves uncertainty while forcing an upgrade without qualification risks semantic regressions in high-authority tools.
+- **Reachable better state:** determine whether vulnerable paths are reachable in mcp-shell's actual Pi usage, identify whether safe transitive overrides or a non-breaking Pi release eliminate them, and otherwise perform a deliberate Pi major upgrade with focused tool-contract regression coverage.
+- **Governing constraint:** known production dependency vulnerabilities on reachable paths must have either a supported remediation or an explicit, evidence-based risk disposition; host-tool core dependencies must not be force-upgraded without semantic validation.
+- **Scope discovery:** inspect npm advisory paths, actual imported Pi capabilities, network/WebSocket use, glob/minimatch inputs, available patched transitive versions, Pi release notes/API changes, and existing basic-tool contract tests.
+- **Repair direction:** perform reachability and upgrade assessment first. Prefer supported non-breaking remediation when possible; otherwise isolate the major upgrade as its own change and verify read/write/edit/bash semantics before adoption.
+- **Exit criteria:** affected advisory paths are either removed/patched or documented as unreachable with evidence, `npm audit --omit=dev` no longer reports unaccepted reachable production vulnerabilities, and any Pi upgrade preserves the intended host-tool contracts.
+- **Priority:** medium; severity is material, but actual reachability and safest remediation are not yet established.
 
 ## Shell History Grows Monotonically
 

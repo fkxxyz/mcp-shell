@@ -1,6 +1,5 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
-import { Router, type NextFunction, type Request, type Response } from "express";
+import { Router, type Response } from "express";
 import type { ActivityTracker } from "../observability/activity-tracker.js";
 import {
   ActivityQuery,
@@ -8,29 +7,10 @@ import {
   toApiSummary,
 } from "../observability/activity-query.js";
 
-export const ACTIVITY_BASIC_USERNAME = "activity";
-
-export function createRequireActivityBasicAuth(password: string) {
-  const expectedPassword = digest(password);
-
-  return function requireActivityBasicAuth(req: Request, res: Response, next: NextFunction) {
-    const credentials = parseBasicAuthorization(req.header("authorization"));
-    if (
-      !credentials ||
-      credentials.username !== ACTIVITY_BASIC_USERNAME ||
-      !timingSafeEqual(digest(credentials.password), expectedPassword)
-    ) {
-      res.setHeader("WWW-Authenticate", 'Basic realm="mcp-shell activity", charset="UTF-8"');
-      return res.status(401).type("text").send("Authentication required");
-    }
-    next();
-  };
-}
-
 export function createActivityApiRouter(query: ActivityQuery, activity: ActivityTracker): Router {
   const router = Router();
 
-  router.get("/stream", (req, res) => {
+  router.get("/activity/stream", (req, res) => {
     const opened = activity.openFeed();
     let closed = false;
     let heartbeat: NodeJS.Timeout | undefined;
@@ -80,10 +60,7 @@ export function createActivityApiRouter(query: ActivityQuery, activity: Activity
       if (!cwd) return sendError(res, 400, "invalid_request", "cwd is required");
 
       const limit = parseLimit(req.query.limit, 20, 100);
-      const before = parsePositiveInteger(req.query.before);
-      if (req.query.before != null && before === undefined) {
-        return sendError(res, 400, "invalid_cursor", "before must be a positive shell ID");
-      }
+      const before = typeof req.query.before === "string" && req.query.before ? req.query.before : undefined;
 
       return res.json(query.listWorkspaceShells(cwd, limit, before));
     } catch (error) {
@@ -115,27 +92,6 @@ export function createActivityApiRouter(query: ActivityQuery, activity: Activity
   });
 
   return router;
-}
-
-function parseBasicAuthorization(value: string | undefined): { username: string; password: string } | undefined {
-  const match = /^Basic\s+(.+)$/i.exec(value ?? "");
-  if (!match) return undefined;
-
-  try {
-    const decoded = Buffer.from(match[1]!, "base64").toString("utf8");
-    const colon = decoded.indexOf(":");
-    if (colon < 0) return undefined;
-    return {
-      username: decoded.slice(0, colon),
-      password: decoded.slice(colon + 1),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function digest(value: string): Buffer {
-  return createHash("sha256").update(value).digest();
 }
 
 function parseLimit(value: unknown, fallback: number, max: number): number {

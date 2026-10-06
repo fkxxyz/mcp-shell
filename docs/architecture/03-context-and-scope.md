@@ -30,7 +30,7 @@ facets:
 | Actor / system | Relationship |
 |---|---|
 | MCP client | Discovers or connects to mcp-shell and invokes registered tools. |
-| Operator | Configures and starts mcp-shell and decides which clients are trusted. |
+| Operator | Configures and starts mcp-shell, decides which clients are trusted, and may inspect host-tool activity through the Web Console. |
 | HTTPS ingress / reverse proxy | Optional remote-profile infrastructure that terminates or forwards public HTTPS traffic. |
 | Trusted outbound tunnel | Optional infrastructure that originates from the host and forwards MCP traffic to a local- or remote-mode endpoint without requiring inbound reachability. |
 | Host filesystem and commands | Resources acted on by file, patch, shell, image, and language tooling. |
@@ -89,3 +89,18 @@ When the same mcp-shell must retain application-layer OAuth for other network cl
 ## Authority Boundary
 
 An MCP session is not a sandbox. Once a trusted caller can invoke `bash`, `write`, `edit`, `apply_patch`, or rename operations, the effective authority is the process user's authority on the host.
+
+### Web Console
+
+```text
+operator browser
+   |
+   | HTTPS / HTTP Basic
+   v
+/console/* + /api/*
+   |
+   v
+read-only observability authority
+```
+
+The Web Console is a separate authority from MCP. Its credential permits only the mounted browser/API read surface; it is never accepted by `/mcp`. The current Web API exposes observation only. Introducing browser-originated mutation requires a separate security reassessment rather than inheriting the read-only Basic-auth boundary by default.

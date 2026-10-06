@@ -29,7 +29,9 @@ The meaningful protected asset is the process user's host authority, not merely 
 
 A network-reachable mcp-shell endpoint requires authentication before MCP requests reach session handling. The current implementation uses bearer tokens issued by its built-in OAuth flow.
 
-The activity browser is a separate authority surface on the same listener. `/activity/*` uses HTTP Basic authentication with an activity-specific password and grants read-only access to observability data. Activity credentials are not accepted by `/mcp`, and the browser does not receive an MCP bearer token.
+The Web Console is a separate authority surface on the same listener. `/console/*` and `/api/*` use HTTP Basic authentication with `WEB_PASSWORD` and grant read-only access to browser-visible observability data. Web credentials are not accepted by `/mcp`, and the browser does not receive an MCP bearer token.
+
+The read-only property is part of the current authority contract, not an assumption that automatically extends to future UI features. The first browser mutation requires an explicit security reassessment covering same-origin/CSRF enforcement, destructive-action confirmation where appropriate, audit semantics, idempotency requirements, and whether one Web credential still represents acceptable authority.
 
 Application-local brute-force tracking is not part of this boundary. Public-edge rate limiting or abuse controls belong to the upstream ingress. HTTPS remains mandatory for public activity access because HTTP Basic credentials otherwise cross the network in replayable form.
 
@@ -69,4 +71,4 @@ Pinned wrappers are resource/ergonomic guardrails. Because user overrides intent
 
 OAuth client secret, administrator password, access tokens, refresh tokens, activity password, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.
 
-The activity password is independent from the MCP OAuth client secret and owner authorization password. Activity responses are not cacheable, cross-origin API access is not enabled, and untrusted tool content is rendered as text rather than executable markup.
+The Web password is independent from the MCP OAuth client secret and owner authorization password. Browser API responses and the SPA HTML shell are not cacheable; content-hashed static assets may be cached immutably. Cross-origin API access is not enabled, and untrusted tool content is rendered as text rather than executable markup.

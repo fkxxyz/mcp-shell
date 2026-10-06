@@ -24,7 +24,7 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Persistent Shell execution contexts
 - Persistent token state
 - Tool-call logging
-- Optional live activity dashboard grouped by workspace
+- Optional read-only Web Console with live Activity grouped by workspace
 - Guardrails for broad filesystem searches
 
 ## Security
@@ -37,7 +37,7 @@ In `local` mode, the server binds only to `127.0.0.1`; treat any tunnel forwardi
 
 ## Requirements
 
-- Node.js
+- Node.js version satisfying the `engines.node` range in `package.json`
 - npm
 - A reachable HTTPS endpoint when used remotely
 - Language servers installed locally if LSP tools are needed
@@ -87,7 +87,7 @@ OAUTH_REDIRECT_URI_ALLOWLIST=
 OAUTH_RESOURCE_ALIASES=
 TOOL_LOG_DIR=
 TOOL_LOG_MAX_CALLS=10000
-ACTIVITY_PASSWORD=
+WEB_PASSWORD=
 ```
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
@@ -102,11 +102,14 @@ Aliases are equivalent names for the same protected MCP resource, not separate a
 
 The simplest tunnel deployment can still use `MODE=local` with no built-in OAuth. Use remote mode plus resource aliases when the tunneled endpoint must retain mcp-shell OAuth, such as when the same instance also serves other authenticated network clients.
 
-## Run
+## Build and run
 
 ```bash
-npx tsx mcp-shell.ts
+npm run build
+npm start
 ```
+
+Production runs compiled Node output from `dist/server/` and serves the Vite build from `dist/web/`. It does not transpile TypeScript or run Vite at service startup.
 
 In local mode, the MCP endpoint is:
 
@@ -118,15 +121,19 @@ In remote mode, the MCP endpoint is `<PUBLIC_BASE_URL>/mcp` and the server liste
 
 For long-running remote deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS.
 
-### Activity dashboard
+### Web Console
 
-Set `ACTIVITY_PASSWORD` to enable the read-only activity UI:
+Set `WEB_PASSWORD` to enable the read-only Web Console and its browser API:
 
 ```text
-<base-url>/activity/
+<base-url>/console/
 ```
 
-Use HTTP Basic Auth username `activity` and the configured password. The activity credential is separate from MCP OAuth and is never accepted by `/mcp`. Remote use requires HTTPS. The dashboard groups tool activity by Shell root directory, shows live calls through SSE, and loads full tool input/output only when a call is opened.
+Use HTTP Basic Auth username `activity` and the configured password. The Web credential is separate from MCP OAuth and is never accepted by `/mcp`. Remote use requires HTTPS.
+
+The current Web Console is read-only. Activity groups tool calls by Shell root directory, streams live lifecycle events over SSE, and exposes addressable Workspace, Shell, and tool-call detail routes. Full tool input/output is fetched only when a retained call is opened.
+
+`WEB_PASSWORD` replaces the former `ACTIVITY_PASSWORD`; the old variable is not read.
 
 ## Connect
 
@@ -196,6 +203,16 @@ The wrapper consumes this flag and runs the underlying command without the searc
 
 ## Development
 
+Start the TypeScript server watcher and Vite together:
+
+```bash
+npm run dev
+```
+
+`npm run dev` starts the server first, reads the actual listen address it reports, then starts Vite with that origin as the `/api/*` proxy target. `PORT` therefore has one authority: the mcp-shell server configuration. Browser code itself always uses the same relative API URLs in development and production.
+
+`npm run dev:web` is intentionally a lower-level command. When used directly, set `MCP_SHELL_DEV_API_ORIGIN` explicitly; normal development should use `npm run dev`.
+
 Run tests:
 
 ```bash
@@ -208,10 +225,25 @@ Run TypeScript checks:
 npm run typecheck
 ```
 
+Build both production targets:
+
+```bash
+npm run build
+```
+
+Run the complete repository verification gate before committing or deploying:
+
+```bash
+npm run verify
+```
+
+This runs server/Web type checks, server/Web tests, the Web dependency-boundary check, the production build, architecture-document validation, and whitespace validation.
+
 ## Project layout
 
 ```text
 mcp-shell.ts       entry point
+src/contracts/     Web API transport types
 src/auth/          OAuth and token handling
 src/http/          HTTP application
 src/mcp/           MCP server and session handling
@@ -219,9 +251,12 @@ src/shell*.ts      durable Shell state and bootstrap
 src/skills.ts      global skill discovery and loading
 src/tools/         MCP tool implementations
 src/observability/ tool-call logging and live activity
-web/               static activity dashboard
+web/src/app/        React application composition and routing
+web/src/features/   feature-owned browser behavior and UI
+web/src/routes/     addressable Web Console pages
 bin/               command wrappers
 test/              automated tests
+dist/              generated production build output
 ```
 
 ## License

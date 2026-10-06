@@ -40,7 +40,7 @@ Owns:
 - command-path construction;
 - validation of required server configuration;
 - parsing exact HTTPS OAuth resource aliases for remote mode; and
-- optional `ACTIVITY_PASSWORD`, which enables the Basic-authenticated `/activity/*` surface when configured.
+- optional `WEB_PASSWORD`, which enables the Basic-authenticated `/console/*` and `/api/*` Web surface together when configured.
 
 `AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings. Shell roots are runtime data created through `create_shell`, not server configuration.
 
@@ -109,11 +109,19 @@ Complete call payloads remain gzip-compressed and the lightweight index gains Sh
 
 The activity projection groups calls by Shell root `cwd` while preserving `shell_id` as execution-context identity. Running calls are process-local; only completed records are persisted. Logging and activity failures remain best-effort and do not replace original tool semantics.
 
-## Activity HTTP and UI (`src/http/`, `web/`)
+## Shared Browser Contracts (`src/contracts/`)
 
-The activity browser surface is served from `/activity/*` on the existing application listener. Static UI, SSE, and read-only activity APIs share one HTTP Basic Auth boundary. `/mcp` remains on its existing OAuth bearer boundary; activity credentials are not accepted there.
+`src/contracts/` owns browser/server DTO shapes for the current Web API. These types describe JSON/SSE transport data only; they do not expose Express, React, SQLite, `ActivityTracker`, `ShellStore`, or other implementation objects. Runtime validation remains concentrated at genuinely untrusted inputs rather than re-validating responses produced by the same release.
 
-The browser owns the ten-minute ACTIVE/EARLIER presentation rule and stable ordering. The backend exposes facts and bounded history rather than server-side activity ranks.
+## Web Console HTTP and UI (`src/http/`, `web/`)
+
+The Web Console SPA is served from `/console/*` on the existing application listener. Browser JSON/SSE APIs are served from `/api/*`. Both namespaces share one HTTP Basic Auth boundary enabled by `WEB_PASSWORD`. `/mcp` remains on its existing OAuth/local-mode authority boundary; Web credentials are not accepted there.
+
+`web/src/app/` owns application composition and routing; `web/src/features/` owns feature behavior; route modules compose feature pages; `web/src/lib/` contains narrow browser infrastructure. Components stay feature-local until demonstrated cross-feature reuse.
+
+The Activity model owns the ten-minute ACTIVE/EARLIER presentation rule and stable ordering independently of React. TanStack Query owns paged REST-like reads; completed SSE events invalidate affected Shell/workspace queries. The backend exposes facts and bounded history rather than server-side activity ranks.
+
+Production serves Vite's content-hashed assets from `dist/web/` and the compiled server from `dist/server/`. SPA fallback is limited to `/console`; missing assets, API paths, MCP paths, and OAuth paths never fall through to `index.html`.
 
 ## Dependency Direction
 
@@ -127,6 +135,7 @@ tool-call-recorder -> tool-log-store + activity-tracker
 activity-http -> activity-query + activity-tracker
 activity-query -> shell-store + tool-log-store + activity-tracker
 basic/lsp -> command-path
+web -> browser contracts + /api HTTP/SSE only
 ```
 
 Authorization may annotate request context for logging, but tool implementations do not depend on OAuth protocol services.

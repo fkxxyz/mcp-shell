@@ -1,5 +1,5 @@
 ---
-summary: "Describes authenticated browser activity loading, live tool-call projection, detail reads, reconnect behavior, and failure isolation."
+summary: "Describes Web Console Activity loading, live tool-call projection, detail reads, reconnect behavior, and failure isolation."
 viewpoint: dynamic
 stakeholders:
   - architect
@@ -21,17 +21,17 @@ facets:
     - access-and-transport
 ---
 
-# Activity Dashboard Runtime
+# Web Console Activity Runtime
 
 ## Browser Entry
 
-1. The browser requests /activity/ over the same public HTTPS origin and listener used by mcp-shell.
-2. The activity Basic Auth middleware challenges missing or invalid credentials.
-3. After successful HTTP Basic authentication, Express serves the static activity application.
-4. The browser opens /activity/api/v1/stream on the same origin; browser-managed Basic credentials authenticate the request.
+1. The browser requests `/console/` over the same public HTTPS origin and listener used by mcp-shell.
+2. The Web Basic Auth middleware challenges missing or invalid credentials.
+3. After successful HTTP Basic authentication, Express serves the built React SPA.
+4. The browser opens `/api/activity/stream` on the same origin; browser-managed Basic credentials authenticate the request.
 5. No MCP OAuth access token is exposed to the activity JavaScript application.
 
-The activity credential authorizes only the /activity/* subtree. /mcp continues to require its existing OAuth bearer token.
+The Web credential authorizes only `/console/*` and `/api/*`. `/mcp` continues to use the authority selected by the local/remote connection profile.
 
 ## Live Feed Establishment
 
@@ -77,7 +77,7 @@ This allows a newly entered workspace to appear immediately rather than waiting 
 
 ## Browser Ordering
 
-The server sends facts rather than ranks. The browser applies the ten-minute two-tier policy:
+The server sends facts rather than ranks. The framework-independent Activity model applies the ten-minute two-tier policy:
 
     running call or recent lifecycle event -> ACTIVE
     otherwise                              -> EARLIER
@@ -86,13 +86,15 @@ An ACTIVE workspace does not move on every new event. Promotion from EARLIER mov
 
 ## Historical Reads
 
-When a workspace or Shell is expanded:
+When a workspace or Shell history page is opened:
 
-1. /activity/api/v1/shells?cwd=... obtains bounded Shell inventory from ShellStore;
-2. /activity/api/v1/shells/:shell_id/calls returns bounded call summaries with cursor pagination; and
-3. /activity/api/v1/tool-calls/:call_id reads the retained gzip payload only when full input/output/error detail is requested.
+1. `/api/shells?cwd=...` obtains bounded Shell inventory from ShellStore;
+2. `/api/shells/:shell_id/calls` returns bounded call summaries with opaque cursor pagination; and
+3. `/api/tool-calls/:call_id` reads the retained gzip payload only when full input/output/error detail is requested.
 
-The browser follows returned cursors with an explicit Load more action so bounded API pages do not silently hide older retained history.
+The browser follows returned cursors with an explicit Load more action so bounded API pages do not silently hide older retained history. Cursors are returned unchanged to the API and are never decoded by browser code.
+
+Completed SSE events invalidate affected TanStack Query entries for Shell history and workspace Shell inventory. Those queries refetch authoritative history rather than having the live feed duplicate pagination or insertion rules.
 
 The live stream never carries full payloads by default.
 
@@ -117,5 +119,5 @@ Running calls are process-local and disappear on restart. Persisted completed ca
 - Activity publication failure does not alter tool semantics.
 - Malformed historical index lines do not prevent server startup.
 - A slow activity browser cannot create unbounded subscriber memory.
-- An activity authentication failure does not reach activity data.
-- Activity Basic credentials cannot authorize /mcp.
+- A Web authentication failure does not reach Web API data.
+- Web Basic credentials cannot authorize `/mcp`.

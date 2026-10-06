@@ -64,9 +64,19 @@ OAuth token state, durable Shell state, and tool logs live under `~/.mcp-shell/`
 
 Tool execution, durable evidence, and live browser activity share one tool-call lifecycle instead of maintaining separate instrumentation paths. `ShellStore` remains authoritative for Shell roots; one recorder coordinates call lifecycle; durable logs and bounded in-memory activity are separate projections.
 
-The activity UI groups Shells by persisted root `cwd`, because the working directory is the useful project-level identity for an operator. This grouping remains a read model rather than a durable Workspace entity.
+The Activity feature groups Shells by persisted root `cwd`, because the working directory is the useful project-level identity for an operator. This grouping remains a read model rather than a durable Workspace entity.
 
-The initial browser surface stays deliberately small: same-process static assets, bounded snapshot plus SSE deltas, and client-owned two-tier stable ordering. WebSocket transport, durable event replay, analytics, a frontend build system, and a tool-log database migration require demonstrated need before adoption.
+## First-Class Web Console, Same Process
+
+The browser surface is a first-class Web Console rather than an Activity-owned static subtree. React + TypeScript + Vite provide the application shell; TanStack Router owns addressable navigation; TanStack Query owns request-derived server state; native SSE continues to deliver Activity lifecycle facts. The framework-independent Activity model retains the two-tier stable-ordering policy.
+
+The Web Console remains a client of explicit `/api/*` HTTP/SSE contracts. It does not import observability stores, Shell persistence, or MCP runtime objects. Browser and backend are one repository, one release, one origin, and one production process; Vite is development/build tooling rather than another deployed server.
+
+The current Web authority remains read-only. WebSocket transport, durable event replay, independent frontend deployment, SSR/full-stack React frameworks, global client-state libraries, API versioning, analytics, and a tool-log database migration require demonstrated need before adoption.
+
+## Build Once, Run Compiled Output
+
+Development may run TypeScript and Vite watchers, but production does not transpile source at startup. `npm run build` produces compiled server output plus content-hashed browser assets, and `npm start` runs the compiled Node entry point. Enabling the Web Console in production while its browser build is missing is a startup error.
 
 ## Guardrails, Not Sandboxing
 

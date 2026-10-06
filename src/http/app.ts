@@ -14,9 +14,14 @@ import { ShellStore } from "../shell-store.js";
 import { SkillCatalog } from "../skills.js";
 import {
   createActivityApiRouter,
-  createRequireActivityBasicAuth,
 } from "./activity-routes.js";
-import { createActivityUiRouter } from "./ui-routes.js";
+import { createRequireWebBasicAuth } from "./web-auth.js";
+import {
+  assertWebUiBuild,
+  createWebUiRouter,
+  defaultWebRoot,
+  isCompiledServerRuntime,
+} from "./web-ui-routes.js";
 
 export type AppRuntime = {
   app: Express;
@@ -27,6 +32,7 @@ const MAX_ACTIVITY_HISTORY_CALLS = 10_000;
 
 export type AppDependencies = {
   skills?: SkillCatalog;
+  webRoot?: string;
 };
 
 export async function createApp(config: AppConfig, dependencies: AppDependencies = {}): Promise<AppRuntime> {
@@ -54,11 +60,15 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   const query = new ActivityQuery(shells, logs, activity);
   const sessions = new McpSessionManager(shells, recorder, config.commandPath, skills);
 
-  if (config.activityPassword) {
-    app.use("/activity", activitySecurityHeaders);
-    app.use("/activity", createRequireActivityBasicAuth(config.activityPassword));
-    app.use("/activity/api/v1", createActivityApiRouter(query, activity));
-    app.use("/activity", createActivityUiRouter());
+  if (config.webPassword) {
+    const webRoot = dependencies.webRoot ?? defaultWebRoot();
+    if (process.env.NODE_ENV === "production" || isCompiledServerRuntime()) {
+      await assertWebUiBuild(webRoot);
+    }
+    const requireWebAuth = createRequireWebBasicAuth(config.webPassword);
+
+    app.use("/api", webApiSecurityHeaders, requireWebAuth, createActivityApiRouter(query, activity));
+    app.use("/console", webConsoleSecurityHeaders, requireWebAuth, createWebUiRouter(webRoot));
   }
 
   if (config.mode === "local") {
@@ -98,8 +108,14 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   };
 }
 
-function activitySecurityHeaders(_req: Request, res: Response, next: NextFunction): void {
+function webApiSecurityHeaders(_req: Request, res: Response, next: NextFunction): void {
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+}
+
+function webConsoleSecurityHeaders(_req: Request, res: Response, next: NextFunction): void {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader(

@@ -136,19 +136,18 @@ HTTP handlers delegate read-model assembly to ActivityQuery; they do not accumul
 
 ## HTTP Surface
 
-The activity surface is grouped under one protected path:
+Activity is one feature inside the Web Console rather than the owner of the browser namespace. Its browser-facing endpoints are:
 
-    /activity/
-      index.html
-      styles.css
-      js/*
-      api/v1/
-        stream
-        shells
-        shells/:shell_id/calls
-        tool-calls/:call_id
+    /api/activity/stream
+    /api/shells?cwd=...
+    /api/shells/:shell_id/calls
+    /api/tool-calls/:call_id
+
+The SPA itself lives under `/console/*`.
 
 The API is read-only. It does not expose tool execution, rerun, Shell close, log deletion, settings mutation, ranking, analytics, or workspace CRUD.
+
+Pagination cursors are opaque transport values. Browser code may persist and return a cursor but must not interpret it as a Shell ID, call ID, sequence, timestamp, or storage key.
 
 The live endpoint uses Server-Sent Events because delivery is server-to-browser only. A connection receives:
 
@@ -174,7 +173,7 @@ Each subscriber queue is bounded. If a client cannot consume events fast enough,
 
 ## Browser State and Ordering
 
-The browser owns presentation policy. It maintains exactly two groups:
+The framework-independent Activity model owns presentation policy. It maintains exactly two groups:
 
 - ACTIVE: a workspace has a running call, or its latest lifecycle event is less than ten minutes old;
 - EARLIER: otherwise.
@@ -185,42 +184,51 @@ The ten-minute threshold, ACTIVE/EARLIER state, stable ordering, and visual rank
 
 ## Browser Implementation Boundary
 
-The initial UI is a static ES-module application under web/:
+The Web Console is a React + TypeScript SPA built by Vite. Activity remains feature-local:
 
     web/
       index.html
-      styles.css
-      js/
-        main.js
-        api.js
-        activity-state.js
-        activity-view.js
-        format.js
+      src/
+        app/
+        routes/
+        features/
+          activity/
+            api.ts
+            activity-model.ts
+            ActivityProvider.tsx
+            components/
+        lib/
+        styles/
 
-The initial implementation deliberately avoids a separate frontend build system while the interaction model remains small. The HTTP API is the stable boundary, allowing a future framework migration without changing observability storage or tool execution.
+`activity-model.ts` owns the two-tier ordering and event-merge rules without React dependencies. `ActivityProvider` owns the long-lived SSE connection and exposes model state to the application. The connection remains active while navigating to Shell or tool-call detail routes.
 
-activity-state.js owns the two-tier ordering and event merge rules. activity-view.js owns DOM rendering. api.js owns HTTP/SSE interaction. Presentation policy does not leak into backend persistence.
+TanStack Query owns bounded historical reads. A completed SSE event invalidates the affected Shell-history query and workspace-Shell query; the browser then rereads authoritative history instead of reproducing backend insertion/pagination rules inside the cache.
 
-Tool inputs, outputs, errors, and repository-controlled text are rendered as text, not interpreted as HTML. The UI must not use untrusted tool content as innerHTML.
+Shell and tool-call detail use addressable routes so refresh, browser back/forward, and copied links preserve user context. State with the same user expectation should prefer route/search state over hidden component state.
+
+Tool inputs, outputs, errors, and repository-controlled text are rendered through React text nodes. Untrusted tool content must not be interpreted as executable markup.
 
 ## Access and Browser Security
 
 The existing remote service continues to use one listener and one public origin. Authentication is separated by path and authority:
 
-    /mcp         -> existing OAuth bearer -> full MCP/host authority
-    /activity/*  -> HTTP Basic Auth       -> read-only observability
+    /mcp        -> existing OAuth/local profile -> full MCP/host authority
+    /console/*  -> HTTP Basic Auth             -> read-only Web Console
+    /api/*      -> HTTP Basic Auth             -> read-only browser API
 
-The two credential types are not interchangeable. Activity Basic credentials are never accepted by /mcp; the browser does not need or receive an MCP bearer token.
+The credential types are not interchangeable. Web Basic credentials are never accepted by `/mcp`; the browser does not need or receive an MCP bearer token.
 
-The activity Basic password is configured independently through `ACTIVITY_PASSWORD`; the Basic username is fixed by the application rather than adding another configuration surface. If `ACTIVITY_PASSWORD` is absent, the entire `/activity/*` surface is not mounted. This makes activity exposure opt-in and fail-closed.
+The Web Basic password is configured independently through `WEB_PASSWORD`; the Basic username remains fixed as `activity` rather than adding another configuration surface. If `WEB_PASSWORD` is absent, both `/console/*` and `/api/*` are not mounted. This makes browser exposure opt-in and fail-closed.
 
 Brute-force protection and public-edge rate limiting are deployment concerns owned by the upstream ingress rather than application-local state.
 
-Because HTTP Basic credentials are replayable credentials, remote activity access requires HTTPS at the public ingress.
+Because HTTP Basic credentials are replayable credentials, remote Web Console access requires HTTPS at the public ingress.
 
-All /activity/* resources, including static assets, API endpoints, and SSE, sit behind the same Basic Auth middleware. Activity API responses use Cache-Control: no-store; the UI does not enable cross-origin API access.
+All `/console/*` and `/api/*` resources sit behind the same Basic Auth middleware. API responses and the SPA HTML shell use `Cache-Control: no-store`; Vite content-hashed assets under `/console/assets/*` use immutable long-term caching. Cross-origin API access is not enabled.
 
 The UI uses a restrictive Content Security Policy appropriate for same-origin static assets and SSE, including no object embedding, no framing, and no interpretation of tool output as executable markup.
+
+The current Web authority is read-only. Adding any browser mutation is an explicit security reassessment point rather than an extension of this Activity design.
 
 ## Target Source Organization
 
@@ -239,30 +247,36 @@ The UI uses a restrictive Content Security Policy appropriate for same-origin st
       http/
         app.ts
         activity-routes.ts
-        ui-routes.ts
+        web-auth.ts
+        web-ui-routes.ts
+      contracts/
+        activity.ts
 
     web/
       index.html
-      styles.css
-      js/
-        main.js
-        api.js
-        activity-state.js
-        activity-view.js
-        format.js
+      vite.config.ts
+      src/
+        app/
+        routes/
+        features/activity/
+        lib/
+        styles/
 
 No generic repository/service/adapter hierarchy is introduced. Each module corresponds to a concrete ownership boundary.
 
 ## Deliberate Non-Goals
 
-The first implementation does not introduce:
+The current implementation does not introduce:
 
 - WebSocket transport;
 - durable event replay;
 - a second workspace database;
 - SQLite migration for tool-log metadata without measured need;
 - server-side activity scores or tiers;
-- frontend framework/build tooling;
+- SSR or a full-stack React framework;
+- independently deployed frontend services;
+- global Redux/Zustand-style client state;
+- API versioning without an independently evolving consumer;
 - application-local brute-force state; or
 - analytics dashboards.
 
