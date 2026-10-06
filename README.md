@@ -84,12 +84,23 @@ Optional values include:
 PORT=3000
 OAUTH_REDIRECT_URI=
 OAUTH_REDIRECT_URI_ALLOWLIST=
+OAUTH_RESOURCE_ALIASES=
 TOOL_LOG_DIR=
 TOOL_LOG_MAX_CALLS=10000
 ACTIVITY_PASSWORD=
 ```
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
+
+If a trusted ingress or tunnel presents a different canonical OAuth resource identifier for the same mcp-shell, set `OAUTH_RESOURCE_ALIASES` to a comma-separated list of exact HTTPS identifiers:
+
+```env
+OAUTH_RESOURCE_ALIASES=https://tunnel.example.com/v1/mcp/example
+```
+
+Aliases are equivalent names for the same protected MCP resource, not separate authorization domains. Only explicitly configured aliases are accepted, and the same resource policy is enforced during authorization, code exchange, refresh, and bearer validation. Alias entries must be HTTPS URLs without credentials or fragments.
+
+The simplest tunnel deployment can still use `MODE=local` with no built-in OAuth. Use remote mode plus resource aliases when the tunneled endpoint must retain mcp-shell OAuth, such as when the same instance also serves other authenticated network clients.
 
 ## Run
 

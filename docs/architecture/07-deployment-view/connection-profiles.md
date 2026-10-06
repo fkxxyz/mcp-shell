@@ -79,6 +79,28 @@ The tunnel client runs on the same host or within the same trusted network bound
 
 This is not a separate mcp-shell mode. It reuses `local` mode; tunnel identity and permission checks are owned by the tunnel provider.
 
+## Remote Through Trusted Outbound Tunnel
+
+```text
+remote MCP client environment
+      |
+trusted tunnel service
+      ^
+      | outbound HTTPS
+tunnel client
+      |
+      v
+remote-mode mcp-shell
+      |
+ OAuth-protected /mcp
+      v
+host tools
+```
+
+Use this profile when the same mcp-shell must keep its own OAuth boundary, for example because other private-network clients also reach the remote-mode listener. The tunnel remains transport placement; it does not replace mcp-shell bearer authentication.
+
+If the tunnel or another trusted intermediary presents a canonical OAuth resource identifier different from `PUBLIC_BASE_URL`, configure that exact HTTPS identifier in `OAUTH_RESOURCE_ALIASES`. The primary URL and aliases are equivalent identifiers for the same protected MCP resource. Unconfigured resource identifiers remain invalid throughout authorization, token refresh, and bearer validation.
+
 ## Local Files and Permissions
 
 The process uses `~/.mcp-shell/` for configuration, token state, durable Shell state, user command overrides, and default tool logs. Configuration/state/log directories and sensitive state files are created with restrictive owner permissions where the implementation manages them.

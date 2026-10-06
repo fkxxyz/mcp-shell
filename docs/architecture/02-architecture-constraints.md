@@ -35,7 +35,7 @@ facets:
 - MCP protocol transport is Streamable HTTP at `/mcp`.
 - **Remote profile:** network-reachable access requires authentication and is expected to sit behind HTTPS ingress.
 - **Local profile:** unauthenticated MCP is permitted only while bound to loopback (`127.0.0.1`); the architecture must not permit `0.0.0.0 + no authentication` as a valid profile.
-- A tunnel profile is transport placement, not a third authorization model: mcp-shell remains in local mode and a trusted outbound tunnel client makes that loopback endpoint usable by a remote MCP client environment.
+- A tunnel is transport placement, not a third authorization model. The common low-friction profile tunnels `local` mode, while deployments that still require mcp-shell application-layer OAuth may tunnel `remote` mode without changing either mode's invariants.
 
 ## Authorization
 

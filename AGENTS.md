@@ -56,7 +56,12 @@ Redirect configuration:
 - `OAUTH_REDIRECT_URI`: optional exact callback URI.
 - `OAUTH_REDIRECT_URI_ALLOWLIST`: comma-separated callback rules. Bare entries and `exact:` entries match exactly; `prefix:` entries match by string prefix. Configure only trusted callback destinations.
 
-Optional settings: `PORT` (defaults to `3000`), `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), `TOOL_LOG_MAX_CALLS` (defaults to `10000`), and `ACTIVITY_PASSWORD`. Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. `ACTIVITY_PASSWORD` enables `/activity/*`; the fixed Basic Auth username is `activity`. The server listens on `0.0.0.0` in remote mode and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
+OAuth resource identity:
+
+- `PUBLIC_BASE_URL` is the primary protected-resource identifier.
+- `OAUTH_RESOURCE_ALIASES` is an optional comma-separated list of exact HTTPS identifiers that name the same protected MCP resource, for example when a trusted ingress or tunnel presents another canonical resource URL. Aliases are equivalent names, not independent authorization domains, and are enforced through authorization, token exchange/refresh, and bearer validation.
+
+Optional settings: `PORT` (defaults to `3000`), `OAUTH_RESOURCE_ALIASES`, `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), `TOOL_LOG_MAX_CALLS` (defaults to `10000`), and `ACTIVITY_PASSWORD`. Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. `ACTIVITY_PASSWORD` enables `/activity/*`; the fixed Basic Auth username is `activity`. The server listens on `0.0.0.0` in remote mode and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
 
 Command lookup uses a pinned PATH prefix. `~/.mcp-shell/bin` is always the first entry and is the user override layer; this repository's `bin/` directory is always second and is the repository default/guardrail layer. The remaining PATH follows afterward. The prefix is normalized again at child-process spawn boundaries so Pi, LSP configuration, or other environment rewriting cannot move those two entries behind another directory. User overrides intentionally take precedence over repository wrappers, so this mechanism is a customization and guardrail layer, not a security boundary against an authorized caller.
 
@@ -79,4 +84,4 @@ There is no configured `start` or `build` script in `package.json`. Run the auto
 - Authorization grants the advertised `full` scope. Registered tools include arbitrary shell execution and file operations as the server process user; absolute paths are accepted by the Pi tools.
 - LSP tools require compatible language servers and project LSP configuration. Rename applies returned workspace edits directly.
 - Token state is shared through a local JSON file, not a database or distributed store. Multiple server instances are not coordinated.
-- There is no configured automated test suite or documented deployment automation.
+- There is no documented deployment automation.

@@ -29,6 +29,8 @@ facets:
 | Correctness | A sessionless non-initialize MCP POST arrives. | The request is rejected rather than creating an implicit session. |
 | Correctness | An authorization code is replayed. | The replay is rejected after the code has been consumed. |
 | Correctness | A refresh token is used successfully. | A new token pair is issued and the used refresh token cannot be used again. |
+| Correctness | A remote OAuth flow uses a configured resource alias. | Authorization, code exchange, refresh, and bearer validation accept the alias while preserving exact resource binding. |
+| Security | A remote OAuth flow or persisted token names an unconfigured resource identifier. | The identifier is rejected; removing an alias and restarting also prevents tokens bound to that alias from being accepted. |
 | Correctness | Two Shells are created for the same directory. | They receive distinct increasing IDs and retain independent identities. |
 | Correctness | A Shell-aware tool receives an unknown `shell_id`. | The call is rejected rather than falling back to another working directory. |
 | Correctness | `create_shell` finds a root `AGENTS.md`. | Its contents are appended to the returned bootstrap instructions; a missing file is accepted. |

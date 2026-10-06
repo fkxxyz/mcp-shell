@@ -32,7 +32,7 @@ facets:
 | MCP client | Discovers or connects to mcp-shell and invokes registered tools. |
 | Operator | Configures and starts mcp-shell and decides which clients are trusted. |
 | HTTPS ingress / reverse proxy | Optional remote-profile infrastructure that terminates or forwards public HTTPS traffic. |
-| Trusted outbound tunnel | Optional local-profile infrastructure that originates from the host and forwards MCP traffic without requiring inbound reachability. |
+| Trusted outbound tunnel | Optional infrastructure that originates from the host and forwards MCP traffic to a local- or remote-mode endpoint without requiring inbound reachability. |
 | Host filesystem and commands | Resources acted on by file, patch, shell, image, and language tooling. |
 | Language servers | Optional host processes required by LSP tools. |
 
@@ -82,7 +82,9 @@ trusted tunnel service
 [tunnel client] -> 127.0.0.1:mcp-shell
 ```
 
-No public listener on the host is required. Tunnel identity and workspace permissions belong to the tunnel provider; mcp-shell still owns host-tool behavior and the loopback-only invariant.
+No public listener on the host is required in this common local-mode profile. Tunnel identity and workspace permissions belong to the tunnel provider; mcp-shell still owns host-tool behavior and the loopback-only invariant.
+
+When the same mcp-shell must retain application-layer OAuth for other network clients, the tunnel may instead target a remote-mode endpoint. That keeps mcp-shell bearer enforcement in the request path; it does not create a third connection mode.
 
 ## Authority Boundary
 

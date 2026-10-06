@@ -34,7 +34,7 @@ MCP session handling and tool registration are independent from deployment expos
 - `remote`: bind to `0.0.0.0`, expose OAuth endpoints, and require bearer authentication for `/mcp`;
 - `local`: bind to `127.0.0.1` and omit OAuth from the MCP request path.
 
-A trusted outbound tunnel reuses local mode rather than introducing another mcp-shell authentication profile.
+A trusted outbound tunnel does not introduce another mcp-shell authentication profile. The common personal-host path tunnels local mode; deployments that need mcp-shell OAuth for all callers may tunnel remote mode instead.
 
 ## Single-Process Composition
 

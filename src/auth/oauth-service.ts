@@ -17,17 +17,24 @@ export type AuthorizeParams = {
 };
 
 export class OAuthService {
+  private readonly acceptedResources: ReadonlySet<string>;
+
   constructor(
     private readonly config: RemoteAppConfig,
     private readonly state: AuthStateStore,
-  ) {}
+  ) {
+    this.acceptedResources = new Set([
+      config.publicBaseUrl,
+      ...config.oauth.resourceAliases,
+    ]);
+  }
 
   validateAuthorizeParams(input: AuthorizeParams): { ok: true } | { ok: false; status: number; error: string } {
     if (input.responseType !== "code") return { ok: false, status: 400, error: "unsupported_response_type" };
     if (input.clientId !== this.config.oauth.clientId) return { ok: false, status: 400, error: "invalid_client" };
     if (!this.isAllowedRedirectUri(input.redirectUri)) return { ok: false, status: 400, error: "invalid_redirect_uri" };
     if (!input.codeChallenge || input.codeChallengeMethod !== "S256") return { ok: false, status: 400, error: "invalid_pkce" };
-    if (input.resource !== this.config.publicBaseUrl) return { ok: false, status: 400, error: "invalid_resource" };
+    if (!this.isAcceptedResource(input.resource)) return { ok: false, status: 400, error: "invalid_resource" };
     return { ok: true };
   }
 
@@ -64,6 +71,7 @@ export class OAuthService {
       record.clientId !== this.config.oauth.clientId ||
       input.redirectUri !== record.redirectUri ||
       input.resource !== record.resource ||
+      !this.isAcceptedResource(record.resource) ||
       !input.verifier ||
       pkceS256(input.verifier) !== record.codeChallenge
     ) {
@@ -75,7 +83,12 @@ export class OAuthService {
 
   refreshAccessToken(refreshToken: string, resource: string): TokenPair | null {
     const record = this.state.getRefreshToken(refreshToken);
-    if (!record || record.resource !== resource) return null;
+    if (!record) return null;
+    if (!this.isAcceptedResource(record.resource)) {
+      this.state.consumeRefreshToken(refreshToken);
+      return null;
+    }
+    if (record.resource !== resource) return null;
 
     this.state.consumeRefreshToken(refreshToken);
     return this.issueTokenPair(record.resource);
@@ -83,7 +96,7 @@ export class OAuthService {
 
   validateAccessToken(token: string): boolean {
     const record = this.state.getAccessToken(token);
-    if (!record || record.expiresAt < Date.now() || record.resource !== this.config.publicBaseUrl) {
+    if (!record || record.expiresAt < Date.now() || !this.isAcceptedResource(record.resource)) {
       if (record) this.state.deleteAccessToken(token);
       return false;
     }
@@ -106,6 +119,10 @@ export class OAuthService {
       expiresIn: Math.floor(ACCESS_TTL_MS / 1000),
       scope: "full",
     };
+  }
+
+  private isAcceptedResource(resource: string): boolean {
+    return this.acceptedResources.has(resource);
   }
 
   private isAllowedRedirectUri(uri: string): boolean {

@@ -9,6 +9,7 @@ import {
   parseConnectionMode,
   parseEnvFile,
   parseNullSeparatedEnvironment,
+  parseOAuthResourceAliases,
   resolveConfiguredPath,
   sourceShellEnvironment,
 } from "../src/config.js";
@@ -21,6 +22,71 @@ test("connection mode defaults to remote and maps to fixed listener hosts", () =
   assert.equal(listenHostForMode("local"), "127.0.0.1");
   assert.equal(listenHostForMode("remote"), "0.0.0.0");
   assert.throws(() => parseConnectionMode("public"), /Invalid MODE: public/);
+});
+
+test("OAuth resource aliases are exact HTTPS identifiers and are deduplicated", () => {
+  assert.deepEqual(
+    parseOAuthResourceAliases(
+      "https://tunnel.example/v1/mcp/one, https://tunnel.example/v1/mcp/one,https://gateway.example/mcp/",
+    ),
+    [
+      "https://tunnel.example/v1/mcp/one",
+      "https://gateway.example/mcp/",
+    ],
+  );
+  assert.deepEqual(parseOAuthResourceAliases(""), []);
+  assert.deepEqual(parseOAuthResourceAliases(undefined), []);
+});
+
+test("OAuth resource aliases reject non-HTTPS, credentials, fragments, and malformed values", () => {
+  for (const value of [
+    "http://tunnel.example/mcp",
+    "https://user:pass@tunnel.example/mcp",
+    "https://tunnel.example/mcp#fragment",
+    "https:tunnel.example/mcp",
+    "not-a-url",
+  ]) {
+    assert.throws(
+      () => parseOAuthResourceAliases(value),
+      /Invalid OAUTH_RESOURCE_ALIASES entry/,
+    );
+  }
+});
+
+test("loadConfig requires PUBLIC_BASE_URL to be an HTTPS origin", async () => {
+  const home = await mkdtemp(join(tmpdir(), "mcp-shell-remote-config-test-"));
+  const originalEnv = { ...process.env };
+
+  try {
+    process.env.HOME = home;
+
+    const configDir = join(home, ".mcp-shell");
+    await mkdir(configDir, { recursive: true });
+
+    for (const publicBaseUrl of [
+      "http://mcp.example.test",
+      "https://mcp.example.test/path",
+      "https://mcp.example.test?tenant=one",
+    ]) {
+      await writeFile(join(configDir, "env"), [
+        "MODE=remote",
+        `PUBLIC_BASE_URL=${publicBaseUrl}`,
+        "OAUTH_CLIENT_ID=chatgpt",
+        "OAUTH_CLIENT_SECRET=client-secret",
+        "ADMIN_PASSWORD=admin-password",
+        "",
+      ].join("\n"), "utf8");
+
+      await assert.rejects(
+        () => loadConfig(),
+        /Invalid PUBLIC_BASE_URL/,
+      );
+    }
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, originalEnv);
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("loadConfig accepts local mode without remote OAuth configuration", async () => {

@@ -44,6 +44,7 @@ export type RemoteAppConfig = BaseAppConfig & {
     adminPassword: string;
     redirectUri: string;
     redirectUriAllowlist: string[];
+    resourceAliases: string[];
   };
 };
 
@@ -94,10 +95,14 @@ export async function loadConfig(): Promise<AppConfig> {
 
   if (mode === "local") return { ...common, mode };
 
+  const publicBaseUrl = validatePublicBaseUrl(
+    mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
+  );
+
   return {
     ...common,
     mode,
-    publicBaseUrl: mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
+    publicBaseUrl,
     oauth: {
       clientId: mustEnv("OAUTH_CLIENT_ID", envFile),
       clientSecret: mustEnv("OAUTH_CLIENT_SECRET", envFile),
@@ -107,6 +112,7 @@ export async function loadConfig(): Promise<AppConfig> {
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean),
+      resourceAliases: parseOAuthResourceAliases(process.env.OAUTH_RESOURCE_ALIASES),
     },
   };
 }
@@ -131,6 +137,8 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "# Comma-separated allowlist. Use exact: or prefix: rules.",
       "# Example for ChatGPT dynamic callbacks:",
       "OAUTH_REDIRECT_URI_ALLOWLIST=prefix:https://chatgpt.com/connector/oauth/",
+      "# Optional HTTPS identifiers that name the same protected MCP resource:",
+      "OAUTH_RESOURCE_ALIASES=",
       "ADMIN_PASSWORD=CHANGE_ME",
       "PORT=3000",
       "# Tool call history. Payloads are gzip-compressed and the oldest calls are removed by count.",
@@ -154,6 +162,19 @@ export function parseConnectionMode(value: string | undefined): ConnectionMode {
   if (value == null || value === "") return "remote";
   if (value === "local" || value === "remote") return value;
   throw new Error(`Invalid MODE: ${value}. Expected local or remote.`);
+}
+
+export function parseOAuthResourceAliases(value: string | undefined): string[] {
+  if (!value) return [];
+
+  const aliases = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  for (const alias of aliases) validateOAuthResourceIdentifier(alias, "OAUTH_RESOURCE_ALIASES entry");
+
+  return [...new Set(aliases)];
 }
 
 export function listenHostForMode(mode: ConnectionMode): "127.0.0.1" | "0.0.0.0" {
@@ -261,4 +282,34 @@ function mustEnv(name: string, envFile: string): string {
     throw new Error(`Configuration ${name} is still CHANGE_ME in ${envFile}`);
   }
   return value;
+}
+
+function validatePublicBaseUrl(value: string): string {
+  validateOAuthResourceIdentifier(value, "PUBLIC_BASE_URL");
+  const url = new URL(value);
+  if (url.pathname !== "/" || url.search) {
+    throw new Error(`Invalid PUBLIC_BASE_URL: ${value}. Expected an HTTPS origin without path, query, credentials, or fragment.`);
+  }
+  return value;
+}
+
+function validateOAuthResourceIdentifier(value: string, name: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw invalidOAuthResourceIdentifier(value, name);
+  }
+
+  if (!/^https:\/\//i.test(value) || url.protocol !== "https:" || url.username || url.password || url.hash) {
+    throw invalidOAuthResourceIdentifier(value, name);
+  }
+
+  return value;
+}
+
+function invalidOAuthResourceIdentifier(value: string, name: string): Error {
+  return new Error(
+    `Invalid ${name}: ${value}. Expected an absolute HTTPS URL without credentials or fragment.`,
+  );
 }

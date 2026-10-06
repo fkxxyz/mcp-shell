@@ -24,7 +24,7 @@ facets:
 | MCP client | A client capable of MCP initialization, session handling, and tool invocation. |
 | Remote mode | Profile that binds all interfaces and requires built-in OAuth bearer authentication before `/mcp`. |
 | Local mode | Profile that binds loopback only and serves `/mcp` without built-in OAuth. |
-| Tunnel profile | Deployment arrangement in which a trusted tunnel client forwards remote MCP traffic to local-mode mcp-shell; not a separate mcp-shell mode. |
+| Tunnel profile | Deployment arrangement in which a trusted tunnel client forwards remote MCP traffic to local- or remote-mode mcp-shell; not a separate mcp-shell mode. |
 | Host authority | Filesystem, process, command, and other OS permissions inherited from the user running mcp-shell. |
 | MCP session | A Streamable HTTP transport session identified by `mcp-session-id` and held in process memory. |
 | Shell | A durable execution-state handle identified by integer `shell_id`. Its current state includes `cwd`; it survives MCP session and process lifetime and is not project identity. |
