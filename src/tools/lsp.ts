@@ -1,7 +1,5 @@
-import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import {
   accessSync,
-  appendFileSync,
   constants as fsConstants,
   existsSync,
   lstatSync,
@@ -16,12 +14,14 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Type } from "typebox";
 import { z } from "zod";
 import { applyCommandPath, resolveExecutable, type CommandPathPolicy } from "../command-path.js";
 import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
+import { LspClient, type Diagnostic, type Range } from "../lsp/client.js";
+import type { LspLaunchSpec } from "../lsp/connection.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
@@ -32,15 +32,6 @@ const DEFAULT_MAX_REFERENCES = 200
 const DEFAULT_MAX_SYMBOLS = 200
 const DEFAULT_MAX_DIAGNOSTICS = 200
 const DEFAULT_MAX_DIRECTORY_FILES = 50
-
-const LOG_FILE = join(tmpdir(), "pi-lsp-tools.log")
-
-function log(message: string, data?: unknown): void {
-  try {
-    const line = `[${new Date().toISOString()}] ${message}${data === undefined ? "" : ` ${JSON.stringify(data)}`}\n`
-    appendFileSync(LOG_FILE, line)
-  } catch {}
-}
 
 function normalizePath(baseDir: string, target: string): string {
   if (isAbsolute(target)) return resolve(target)
@@ -226,16 +217,6 @@ type LSPServerConfig = {
   initialization?: Record<string, unknown>
 }
 
-type Position = {
-  line: number
-  character: number
-}
-
-type Range = {
-  start: Position
-  end: Position
-}
-
 type Location = {
   uri: string
   range: Range
@@ -261,14 +242,6 @@ type DocumentSymbol = {
   range: Range
   selectionRange: Range
   children?: DocumentSymbol[]
-}
-
-type Diagnostic = {
-  range: Range
-  severity?: number
-  code?: string | number
-  source?: string
-  message: string
 }
 
 type TextEdit = {
@@ -332,13 +305,6 @@ type ServerLookupInfo = {
   id: string
   command: string[]
   extensions: string[]
-}
-
-type LspLaunchSpec = {
-  cwd: string
-  env: NodeJS.ProcessEnv
-  executable: string
-  args: string[]
 }
 
 type ServerLookupResult =
@@ -857,604 +823,8 @@ function formatServerLookupError(result: Exclude<ServerLookupResult, { status: "
   ].join("\n")
 }
 
-type StreamReader = {
-  read(): Promise<{ done: boolean; value: Uint8Array | undefined }>
-}
-
-type UnifiedProcess = {
-  stdin: { write(chunk: Uint8Array | string): void }
-  stdout: { getReader(): StreamReader }
-  stderr: { getReader(): StreamReader }
-  exitCode: number | null
-  exited: Promise<number>
-  kill(signal?: string): void
-}
-
-function validateCwd(cwd: string): { valid: boolean; error?: string } {
-  try {
-    if (!existsSync(cwd)) return { valid: false, error: `Working directory does not exist: ${cwd}` }
-    const stats = statSync(cwd)
-    if (!stats.isDirectory()) return { valid: false, error: `Path is not a directory: ${cwd}` }
-    return { valid: true }
-  } catch (error) {
-    return { valid: false, error: `Cannot access working directory: ${cwd} (${error instanceof Error ? error.message : String(error)})` }
-  }
-}
-
-function wrapNodeProcess(proc: ChildProcess): UnifiedProcess {
-  let resolveExited: (code: number) => void = () => {}
-  let exitCode: number | null = null
-  const exited = new Promise<number>((resolvePromise) => {
-    resolveExited = resolvePromise
-  })
-
-  proc.on("exit", (code) => {
-    exitCode = code ?? 1
-    resolveExited(exitCode)
-  })
-  proc.on("error", () => {
-    if (exitCode === null) {
-      exitCode = 1
-      resolveExited(1)
-    }
-  })
-
-  const createStreamReader = (stream: NodeJS.ReadableStream | null): StreamReader => {
-    const chunks: Uint8Array[] = []
-    let ended = false
-    let pendingResolve: ((value: { done: boolean; value: Uint8Array | undefined }) => void) | null = null
-
-    if (stream) {
-      stream.on("data", (chunk: Buffer) => {
-        const uint8 = new Uint8Array(chunk)
-        if (pendingResolve) {
-          const resolveNow = pendingResolve
-          pendingResolve = null
-          resolveNow({ done: false, value: uint8 })
-        } else {
-          chunks.push(uint8)
-        }
-      })
-      stream.on("end", () => {
-        ended = true
-        if (pendingResolve) {
-          const resolveNow = pendingResolve
-          pendingResolve = null
-          resolveNow({ done: true, value: undefined })
-        }
-      })
-      stream.on("error", () => {
-        ended = true
-        if (pendingResolve) {
-          const resolveNow = pendingResolve
-          pendingResolve = null
-          resolveNow({ done: true, value: undefined })
-        }
-      })
-    } else {
-      ended = true
-    }
-
-    return {
-      read() {
-        return new Promise((resolvePromise) => {
-          if (chunks.length > 0) {
-            resolvePromise({ done: false, value: chunks.shift()! })
-            return
-          }
-          if (ended) {
-            resolvePromise({ done: true, value: undefined })
-            return
-          }
-          pendingResolve = resolvePromise
-        })
-      },
-    }
-  }
-
-  return {
-    stdin: {
-      write(chunk: Uint8Array | string) {
-        proc.stdin?.write(chunk)
-      },
-    },
-    stdout: { getReader: () => createStreamReader(proc.stdout) },
-    stderr: { getReader: () => createStreamReader(proc.stderr) },
-    get exitCode() {
-      return exitCode
-    },
-    exited,
-    kill(signal?: string) {
-      try {
-        proc.kill(signal === "SIGKILL" ? "SIGKILL" : undefined)
-      } catch {}
-    },
-  }
-}
-
-function spawnProcess(launch: LspLaunchSpec): UnifiedProcess {
-  const validation = validateCwd(launch.cwd)
-  if (!validation.valid) {
-    throw new Error(`[LSP] ${validation.error}`)
-  }
-
-  const proc = nodeSpawn(launch.executable, launch.args, {
-    cwd: launch.cwd,
-    env: launch.env,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-    shell: process.platform === "win32",
-  })
-  return wrapNodeProcess(proc)
-}
-
-type JsonRpcRequestMessage = {
-  jsonrpc: "2.0"
-  id: number
-  method: string
-  params?: unknown
-}
-
-type JsonRpcNotificationMessage = {
-  jsonrpc: "2.0"
-  method: string
-  params?: unknown
-}
-
-type JsonRpcSuccessResponse = {
-  jsonrpc: "2.0"
-  id: number
-  result?: unknown
-}
-
-type JsonRpcErrorResponse = {
-  jsonrpc: "2.0"
-  id: number | null
-  error: { code: number; message: string; data?: unknown }
-}
-
-type JsonRpcMessage = JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcSuccessResponse | JsonRpcErrorResponse
-
-class LSPClientTransport {
-  protected readonly root: string
-  protected proc: UnifiedProcess | null = null
-  protected readonly stderrBuffer: string[] = []
-  protected processExited = false
-  protected readonly diagnosticsStore = new Map<string, Diagnostic[]>()
-  protected readonly REQUEST_TIMEOUT = 15000
-  private nextRequestID = 1
-  private readonly pendingRequests = new Map<number, {
-    resolve: (value: unknown) => void
-    reject: (error: Error) => void
-    timeout: ReturnType<typeof setTimeout>
-  }>()
-  private readLoopStarted = false
-
-  constructor(
-    protected server: ResolvedServer,
-    protected launch: LspLaunchSpec,
-  ) {
-    this.root = launch.cwd
-  }
-
-  async start(): Promise<void> {
-    this.proc = spawnProcess(this.launch)
-
-    this.startStderrReading()
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
-
-    if (this.proc.exitCode !== null) {
-      throw new Error(`LSP server exited immediately with code ${this.proc.exitCode}`)
-    }
-
-    this.startReadLoop()
-  }
-
-  private startReadLoop(): void {
-    if (!this.proc || this.readLoopStarted) return
-    this.readLoopStarted = true
-
-    const reader = this.proc.stdout.getReader()
-    const loop = async () => {
-      let buffer = Buffer.alloc(0)
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done || !value) break
-          buffer = Buffer.concat([buffer, Buffer.from(value)])
-
-          while (true) {
-            const headerEnd = buffer.indexOf("\r\n\r\n")
-            if (headerEnd === -1) break
-
-            const headerText = buffer.slice(0, headerEnd).toString("utf-8")
-            const match = headerText.match(/Content-Length:\s*(\d+)/i)
-            if (!match) {
-              buffer = buffer.slice(headerEnd + 4)
-              continue
-            }
-
-            const contentLength = Number(match[1])
-            const messageStart = headerEnd + 4
-            const messageEnd = messageStart + contentLength
-            if (buffer.length < messageEnd) break
-
-            const body = buffer.slice(messageStart, messageEnd).toString("utf-8")
-            buffer = buffer.slice(messageEnd)
-
-            try {
-              this.handleMessage(JSON.parse(body) as JsonRpcMessage)
-            } catch (error) {
-              log("Failed to parse LSP message", {
-                error: error instanceof Error ? error.message : String(error),
-                body,
-              })
-            }
-          }
-        }
-      } catch (error) {
-        log("LSP stdout loop failed", error instanceof Error ? error.message : String(error))
-      } finally {
-        this.processExited = true
-        this.rejectPendingRequests(new Error("LSP server connection closed"))
-      }
-    }
-
-    void loop()
-  }
-
-  private handleMessage(message: JsonRpcMessage): void {
-    if ("method" in message) {
-      if (message.method === "textDocument/publishDiagnostics") {
-        const params = message.params as { uri?: string; diagnostics?: Diagnostic[] } | undefined
-        if (params?.uri) {
-          this.diagnosticsStore.set(params.uri, params.diagnostics ?? [])
-        }
-        return
-      }
-
-      if ("id" in message) {
-        if (message.method === "workspace/configuration") {
-          const params = message.params as { items?: Array<{ section?: string }> } | undefined
-          const items = params?.items ?? []
-          this.sendRaw({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: items.map((item) => (item.section === "json" ? { validate: { enable: true } } : {})),
-          })
-          return
-        }
-
-        if (message.method === "client/registerCapability" || message.method === "window/workDoneProgress/create") {
-          this.sendRaw({ jsonrpc: "2.0", id: message.id, result: null })
-          return
-        }
-
-        this.sendRaw({
-          jsonrpc: "2.0",
-          id: message.id,
-          error: {
-            code: -32601,
-            message: `Method not implemented: ${message.method}`,
-          },
-        })
-      }
-      return
-    }
-
-    if ("id" in message) {
-      if (message.id === null) return
-      const pending = this.pendingRequests.get(message.id)
-      if (!pending) return
-      clearTimeout(pending.timeout)
-      this.pendingRequests.delete(message.id)
-
-      if ("error" in message) {
-        pending.reject(new Error(message.error.message))
-      } else {
-        pending.resolve(message.result)
-      }
-    }
-  }
-
-  private sendRaw(message: JsonRpcMessage): void {
-    if (!this.proc || this.processExited || this.proc.exitCode !== null) {
-      throw new Error("LSP client not started")
-    }
-
-    const body = Buffer.from(JSON.stringify(message), "utf-8")
-    const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf-8")
-    this.proc.stdin.write(Buffer.concat([header, body]))
-  }
-
-  private rejectPendingRequests(error: Error): void {
-    for (const [, pending] of this.pendingRequests) {
-      clearTimeout(pending.timeout)
-      pending.reject(error)
-    }
-    this.pendingRequests.clear()
-  }
-
-  protected startStderrReading(): void {
-    if (!this.proc) return
-    const reader = this.proc.stderr.getReader()
-
-    const read = async () => {
-      const decoder = new TextDecoder()
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done || !value) break
-          const text = decoder.decode(value)
-          this.stderrBuffer.push(text)
-          if (this.stderrBuffer.length > 100) this.stderrBuffer.shift()
-        }
-      } catch {}
-    }
-
-    void read()
-  }
-
-  protected sendRequest<T>(method: string, params?: unknown): Promise<T> {
-    if (!this.proc) throw new Error("LSP client not started")
-    if (this.processExited || this.proc.exitCode !== null) {
-      throw new Error(`LSP server already exited (code: ${this.proc.exitCode})`)
-    }
-
-    const id = this.nextRequestID++
-    return new Promise<T>((resolvePromise, rejectPromise) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id)
-        rejectPromise(new Error(`LSP request timeout (method: ${method})`))
-      }, this.REQUEST_TIMEOUT)
-
-      this.pendingRequests.set(id, {
-        resolve: (value) => resolvePromise(value as T),
-        reject: rejectPromise,
-        timeout,
-      })
-
-      try {
-        this.sendRaw({
-          jsonrpc: "2.0",
-          id,
-          method,
-          ...(params === undefined ? {} : { params }),
-        })
-      } catch (error) {
-        clearTimeout(timeout)
-        this.pendingRequests.delete(id)
-        rejectPromise(error instanceof Error ? error : new Error(String(error)))
-      }
-    })
-  }
-
-  protected sendNotification(method: string, params?: unknown): void {
-    if (!this.proc || this.processExited || this.proc.exitCode !== null) return
-    this.sendRaw({
-      jsonrpc: "2.0",
-      method,
-      ...(params === undefined ? {} : { params }),
-    })
-  }
-
-  isAlive(): boolean {
-    return this.proc !== null && !this.processExited && this.proc.exitCode === null
-  }
-
-  async stop(): Promise<void> {
-    try {
-      this.sendNotification("shutdown", {})
-      this.sendNotification("exit")
-    } catch {}
-
-    const proc = this.proc
-    this.proc = null
-    this.processExited = true
-    this.rejectPendingRequests(new Error("LSP client stopped"))
-    this.diagnosticsStore.clear()
-
-    if (!proc) return
-
-    let exitedBeforeTimeout = false
-    try {
-      proc.kill()
-      let timeoutID: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        proc.exited.then(() => {
-          exitedBeforeTimeout = true
-        }).finally(() => {
-          if (timeoutID) clearTimeout(timeoutID)
-        }),
-        new Promise<void>((resolvePromise) => {
-          timeoutID = setTimeout(resolvePromise, 5000)
-        }),
-      ])
-      if (!exitedBeforeTimeout) {
-        try {
-          proc.kill("SIGKILL")
-          await Promise.race([proc.exited, new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 1000))])
-        } catch {}
-      }
-    } catch {}
-  }
-}
-
-class LSPClientConnection extends LSPClientTransport {
-  async initialize(): Promise<void> {
-    const rootUri = pathToFileURL(this.root).href
-    await this.sendRequest("initialize", {
-      processId: process.pid,
-      rootUri,
-      rootPath: this.root,
-      workspaceFolders: [{ uri: rootUri, name: "workspace" }],
-      capabilities: {
-        textDocument: {
-          hover: { contentFormat: ["markdown", "plaintext"] },
-          definition: { linkSupport: true },
-          references: {},
-          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-          publishDiagnostics: {},
-          rename: {
-            prepareSupport: true,
-            prepareSupportDefaultBehavior: 1,
-            honorsChangeAnnotations: true,
-          },
-          codeAction: {
-            codeActionLiteralSupport: {
-              codeActionKind: {
-                valueSet: [
-                  "quickfix",
-                  "refactor",
-                  "refactor.extract",
-                  "refactor.inline",
-                  "refactor.rewrite",
-                  "source",
-                  "source.organizeImports",
-                  "source.fixAll",
-                ],
-              },
-            },
-            isPreferredSupport: true,
-            disabledSupport: true,
-            dataSupport: true,
-            resolveSupport: { properties: ["edit", "command"] },
-          },
-        },
-        workspace: {
-          symbol: {},
-          workspaceFolders: true,
-          configuration: true,
-          applyEdit: true,
-          workspaceEdit: { documentChanges: true },
-        },
-      },
-      initializationOptions: this.server.initialization,
-    })
-
-    this.sendNotification("initialized")
-    this.sendNotification("workspace/didChangeConfiguration", {
-      settings: { json: { validate: { enable: true } } },
-    })
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 300))
-  }
-}
-
-class LSPClient extends LSPClientConnection {
-  private openedFiles = new Set<string>()
-  private documentVersions = new Map<string, number>()
-  private lastSyncedText = new Map<string, string>()
-
-  async openFile(filePath: string): Promise<void> {
-    const absPath = resolve(filePath)
-    const uri = pathToFileURL(absPath).href
-    const text = readFileSync(absPath, "utf-8")
-
-    if (!this.openedFiles.has(absPath)) {
-      const version = 1
-      this.sendNotification("textDocument/didOpen", {
-        textDocument: {
-          uri,
-          languageId: getLanguageId(extname(absPath)),
-          version,
-          text,
-        },
-      })
-      this.openedFiles.add(absPath)
-      this.documentVersions.set(uri, version)
-      this.lastSyncedText.set(uri, text)
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000))
-      return
-    }
-
-    const previousText = this.lastSyncedText.get(uri)
-    if (previousText === text) return
-
-    const nextVersion = (this.documentVersions.get(uri) ?? 1) + 1
-    this.documentVersions.set(uri, nextVersion)
-    this.lastSyncedText.set(uri, text)
-
-    this.sendNotification("textDocument/didChange", {
-      textDocument: { uri, version: nextVersion },
-      contentChanges: [{ text }],
-    })
-    this.sendNotification("textDocument/didSave", {
-      textDocument: { uri },
-      text,
-    })
-  }
-
-  async definition(filePath: string, line: number, character: number): Promise<unknown> {
-    const absPath = resolve(filePath)
-    await this.openFile(absPath)
-    return this.sendRequest("textDocument/definition", {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-    })
-  }
-
-  async references(filePath: string, line: number, character: number, includeDeclaration = true): Promise<unknown> {
-    const absPath = resolve(filePath)
-    await this.openFile(absPath)
-    return this.sendRequest("textDocument/references", {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-      context: { includeDeclaration },
-    })
-  }
-
-  async documentSymbols(filePath: string): Promise<unknown> {
-    const absPath = resolve(filePath)
-    await this.openFile(absPath)
-    return this.sendRequest("textDocument/documentSymbol", {
-      textDocument: { uri: pathToFileURL(absPath).href },
-    })
-  }
-
-  async workspaceSymbols(query: string): Promise<unknown> {
-    return this.sendRequest("workspace/symbol", { query })
-  }
-
-  async diagnostics(filePath: string): Promise<{ items: Diagnostic[] }> {
-    const absPath = resolve(filePath)
-    const uri = pathToFileURL(absPath).href
-    await this.openFile(absPath)
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 500))
-
-    try {
-      const result = await this.sendRequest<{ items?: Diagnostic[] }>("textDocument/diagnostic", {
-        textDocument: { uri },
-      })
-      if (result && typeof result === "object" && "items" in result) {
-        return { items: result.items ?? [] }
-      }
-    } catch {}
-
-    return { items: this.diagnosticsStore.get(uri) ?? [] }
-  }
-
-  async prepareRename(filePath: string, line: number, character: number): Promise<unknown> {
-    const absPath = resolve(filePath)
-    await this.openFile(absPath)
-    return this.sendRequest("textDocument/prepareRename", {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-    })
-  }
-
-  async rename(filePath: string, line: number, character: number, newName: string): Promise<unknown> {
-    const absPath = resolve(filePath)
-    await this.openFile(absPath)
-    return this.sendRequest("textDocument/rename", {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-      newName,
-    })
-  }
-}
-
 type ManagedClient = {
-  client: LSPClient
+  client: LspClient
   lastUsedAt: number
   refCount: number
   initPromise?: Promise<void>
@@ -1489,7 +859,7 @@ export class LSPServerManager {
     }
   }
 
-  async getClient(server: ResolvedServer, launch: LspLaunchSpec): Promise<LSPClient> {
+  async getClient(server: ResolvedServer, launch: LspLaunchSpec): Promise<LspClient> {
     if (this.closePromise) throw new Error("LSP server manager is closing")
     this.startCleanupTimer()
 
@@ -1534,7 +904,11 @@ export class LSPServerManager {
       }
     }
 
-    const client = new LSPClient(server, launch)
+    const client = new LspClient({
+      serverId: server.id,
+      initializationOptions: server.initialization,
+      languageIdForPath: (filePath) => getLanguageId(extname(filePath)),
+    }, launch)
     const initPromise = (async () => {
       await client.start()
       await client.initialize()
@@ -1610,7 +984,7 @@ async function withLspClient<T>(
   projectDirectory: string,
   filePath: string,
   commandPath: CommandPathPolicy,
-  fn: (client: LSPClient) => Promise<T>
+  fn: (client: LspClient) => Promise<T>
 ): Promise<T> {
   const absPath = resolve(filePath)
   if (isDirectoryPath(absPath)) {
@@ -1879,6 +1253,7 @@ async function aggregateDiagnosticsForDirectory(
   extension: string,
   commandPath: CommandPathPolicy,
   severity?: "error" | "warning" | "information" | "hint" | "all",
+  signal?: AbortSignal,
   maxFiles: number = DEFAULT_MAX_DIRECTORY_FILES
 ): Promise<string> {
   if (!extension.startsWith(".")) {
@@ -1911,7 +1286,7 @@ async function aggregateDiagnosticsForDirectory(
   try {
     for (const file of filesToProcess) {
       try {
-        const result = await client.diagnostics(file)
+        const result = await client.diagnostics(file, signal)
         const filtered = filterDiagnosticsBySeverity(result.items, severity)
         allDiagnostics.push(...filtered.map((diagnostic) => ({ filePath: file, diagnostic })))
       } catch (error) {
@@ -2151,9 +1526,9 @@ export function registerLspTools(
         const absoluteTarget = normalizePath(ctx.cwd, targetPath);
         if (isDirectoryPath(absoluteTarget)) {
           if (!params.extension) throw new Error("Directory path requires 'extension' parameter. Example: lsp_diagnostics(filePath='src', extension='.ts')");
-          return textResult(await aggregateDiagnosticsForDirectory(manager, ctx.cwd, absoluteTarget, params.extension, commandPath, params.severity));
+          return textResult(await aggregateDiagnosticsForDirectory(manager, ctx.cwd, absoluteTarget, params.extension, commandPath, params.severity, signal));
         }
-        const result = await withLspClient(manager, ctx.cwd, absoluteTarget, commandPath, (client) => client.diagnostics(absoluteTarget) as Promise<{ items?: Diagnostic[] } | Diagnostic[] | null>);
+        const result = await withLspClient(manager, ctx.cwd, absoluteTarget, commandPath, (client) => client.diagnostics(absoluteTarget, signal) as Promise<{ items?: Diagnostic[] } | Diagnostic[] | null>);
         let diagnostics: Diagnostic[] = [];
         if (Array.isArray(result)) diagnostics = result;
         else if (result?.items) diagnostics = result.items;

@@ -91,13 +91,15 @@ Tool registration is modular:
 - `basic.ts`: MCP registration for application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`;
 - `apply-patch.ts`: structured patch application;
 - `read-image.ts`: image inspection;
-- `lsp.ts`: definition, reference, symbol, diagnostic, and rename operations.
+- `lsp.ts`: LSP server/config selection, reusable-client management, workspace-edit application, result formatting, and MCP registration for definition, reference, symbol, diagnostic, and rename operations.
+
+`src/lsp/connection.ts` owns the stdio child connection and JSON-RPC framing/request lifecycle. `src/lsp/client.ts` owns LSP initialization, advertised/server capabilities, document synchronization, feature requests, and diagnostic convergence. Normal successful progress follows observable protocol/process state rather than fixed readiness sleeps: optional feature calls follow server capabilities, pull diagnostics use `diagnosticProvider`, and push-only diagnostics wait for a matching current-document publication with a bounded failure deadline.
 
 Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root relative operations at that Shell's `cwd`. An unknown ID is rejected instead of falling back to process or server working directory. Tools do not decide network exposure or authorization.
 
 `src/tools/invocation-gate.ts` owns process-wide tool admission and active-invocation counting. `src/tools/invoke.ts` is the shared Shell-aware invocation boundary and enters that gate before Shell resolution or tool-call recording. `create_shell` and `skill`, which are not Shell-aware invocations, enter the same gate directly. Shutdown therefore has one tool-work boundary without making observability responsible for lifecycle correctness.
 
-`src/runtime/drain-gate.ts` provides the narrow close-admission-and-drain primitive shared by HTTP and tool lifecycle boundaries. `src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking. `ProcessSupervisor` owns registered tool child processes; application shutdown gives active tools three seconds to finish naturally, then the supervisor sends process-group `SIGTERM`, waits one second, and escalates survivors to `SIGKILL`. `LSPServerManager` owns the reusable LSP-client pool and its idle lifecycle. LSP server selection prepares one launch specification from the detected workspace, server-specific environment, LSP supplemental paths, and application command policy; the client starts the already-resolved executable from that same specification. These resources are application-owned and shared across MCP sessions rather than process-global or session-local.
+`src/runtime/drain-gate.ts` provides the narrow close-admission-and-drain primitive shared by HTTP and tool lifecycle boundaries. `src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking. `ProcessSupervisor` owns registered tool child processes; application shutdown gives active tools three seconds to finish naturally, then the supervisor sends process-group `SIGTERM`, waits one second, and escalates survivors to `SIGKILL`. `LSPServerManager` owns the reusable LSP-client pool and its idle lifecycle. LSP server selection prepares one launch specification from the detected workspace, server-specific environment, LSP supplemental paths, and application command policy; `LspClient` starts the already-resolved executable through the stdio connection and advances protocol state from actual responses/notifications. These resources are application-owned and shared across MCP sessions rather than process-global or session-local.
 
 ## Command Policy (`src/command-path.ts`, `bin/`)
 
@@ -136,7 +138,9 @@ tools -> shell-store + skills + tool-call-recorder + host coordination
 tool-call-recorder -> tool-history-store + activity-tracker
 activity-http -> activity-query + activity-tracker
 activity-query -> shell-store + tool-history-store + activity-tracker
-basic/lsp/read-image -> command-path
+tools/lsp -> lsp + command-path
+lsp/client -> lsp/connection
+basic/read-image -> command-path
 web -> browser contracts + /api HTTP/SSE only
 ```
 

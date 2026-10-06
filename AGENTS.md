@@ -16,7 +16,8 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
 - `src/observability/` owns the unified tool-call lifecycle, durable completed-call history through SQLite metadata plus date-sharded gzip payloads, bounded live activity projection, and activity read models.
 - `src/contracts/` owns browser/server DTO shapes for the Web API without exposing backend implementation objects.
-- `src/tools/` contains modular MCP registrations and tool implementations. `basic.ts` registers application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`; `apply-patch.ts` and `lsp.ts` provide structured patching and language-server operations.
+- `src/tools/` contains modular MCP registrations and tool adapters. `basic.ts` registers application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`; `apply-patch.ts` owns structured patching, while `lsp.ts` owns LSP server/config selection, reusable-client management, workspace-edit application, formatting, and MCP presentation.
+- `src/lsp/` contains the reusable LSP runtime boundaries: `connection.ts` owns stdio/JSON-RPC lifecycle, while `client.ts` owns initialization, capabilities, document synchronization, feature requests, and diagnostics convergence.
 - `src/host/` contains narrow cross-tool host mechanisms for path resolution, structured file-mutation coordination, and supervised child-process lifecycle.
 - `web/` is the React + TypeScript Web Console built by Vite. TanStack Router owns routes, TanStack Query owns request-derived server state, and the Activity feature keeps SSE/live ordering logic feature-local.
 - Express handles HTTP routes and form/JSON parsing.
