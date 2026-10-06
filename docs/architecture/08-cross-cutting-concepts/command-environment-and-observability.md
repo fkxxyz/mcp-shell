@@ -37,6 +37,10 @@ The final command path is normalized to:
 
 The same policy is re-applied when supported child processes are spawned so intervening environment rewriting cannot silently move the two pinned layers behind another directory.
 
+Executable lookup is owned by `src/command-path.ts` as the shared command-resolution authority. Lookup consumes the exact child working directory and effective environment that execution will use. Bare commands are resolved in effective PATH order; explicit relative commands are resolved from the child working directory. Unix lookup requires an executable regular file, while Windows lookup follows the supported `PATHEXT` candidate rules.
+
+LSP adds its server-specific environment and supplemental command directories before the application command-path policy is reapplied. Server selection then produces one launch specification containing the workspace cwd, effective environment, resolved executable, and arguments. Availability and execution consume that same specification: the spawned LSP process receives the already-resolved executable instead of performing a second PATH lookup. LSP configuration discovery remains rooted at the Shell/project directory while executable resolution and process cwd use the target file's detected workspace root; these are intentionally distinct contexts.
+
 ## Search Guardrails
 
 Repository wrappers for `rg`, `grep`, `find`, and `fd` use a 200 ms wall-clock budget. If exceeded, they preserve output already produced, terminate the underlying command, and emit a structured timeout explanation. `--unsafe` deliberately bypasses that budget after the wrapper removes the flag.

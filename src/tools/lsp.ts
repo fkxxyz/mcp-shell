@@ -20,7 +20,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Type } from "typebox";
 import { z } from "zod";
-import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import { applyCommandPath, resolveExecutable, type CommandPathPolicy } from "../command-path.js";
 import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
@@ -334,10 +334,17 @@ type ServerLookupInfo = {
   extensions: string[]
 }
 
+type LspLaunchSpec = {
+  cwd: string
+  env: NodeJS.ProcessEnv
+  executable: string
+  args: string[]
+}
+
 type ServerLookupResult =
-  | { status: "found"; server: ResolvedServer }
+  | { status: "found"; server: ResolvedServer; launch: LspLaunchSpec }
   | { status: "not_configured"; extension: string; availableServers: string[] }
-  | { status: "not_installed"; server: ServerLookupInfo; installHint: string }
+  | { status: "not_installed"; server: ServerLookupInfo; launchRoot: string; installHint: string }
 
 type ApplyResult = {
   success: boolean
@@ -721,48 +728,42 @@ function getLspServerAdditionalPathBases(workingDirectory: string): string[] {
   ]
 }
 
-function isServerInstalled(command: string[], workingDirectory: string): boolean {
-  if (command.length === 0) return false
-  const cmd = command[0]!
+function prepareLspLaunch(
+  server: ResolvedServer,
+  launchRoot: string,
+  commandPath: CommandPathPolicy,
+): LspLaunchSpec | undefined {
+  if (server.command.length === 0) return undefined
 
-  if (cmd.includes("/") || cmd.includes("\\")) {
-    if (existsSync(cmd)) return true
+  const env = { ...process.env, ...server.env }
+  const pathValue = process.platform === "win32" ? env.PATH ?? env.Path ?? "" : env.PATH ?? ""
+  const launchPath = [pathValue, ...getLspServerAdditionalPathBases(launchRoot)].filter(Boolean).join(delimiter)
+  if (process.platform === "win32" && env.Path !== undefined) env.Path = launchPath
+  env.PATH = launchPath
+  const effectiveEnv = applyCommandPath(env, commandPath)
+  const executable = resolveExecutable(server.command[0]!, { cwd: launchRoot, env: effectiveEnv })
+  if (!executable) return undefined
+
+  return {
+    cwd: launchRoot,
+    env: effectiveEnv,
+    executable,
+    args: server.command.slice(1),
   }
-
-  const isWindows = process.platform === "win32"
-  let exts = [""]
-  if (isWindows) {
-    const pathExt = process.env.PATHEXT || ""
-    exts = pathExt
-      ? [...new Set(["", ...pathExt.split(";").filter(Boolean), ".exe", ".cmd", ".bat", ".ps1"])]
-      : ["", ".exe", ".cmd", ".bat", ".ps1"]
-  }
-
-  let pathEnv = process.env.PATH || ""
-  if (isWindows && !pathEnv) pathEnv = process.env.Path || ""
-  const paths = pathEnv.split(delimiter).filter(Boolean)
-
-  for (const base of paths) {
-    for (const suffix of exts) {
-      if (existsSync(join(base, cmd + suffix))) return true
-    }
-  }
-
-  for (const base of getLspServerAdditionalPathBases(workingDirectory)) {
-    for (const suffix of exts) {
-      if (existsSync(join(base, cmd + suffix))) return true
-    }
-  }
-
-  if (cmd === "bun" || cmd === "node") return true
-  return false
 }
 
-function findServerForExtension(projectDirectory: string, ext: string): ServerLookupResult {
-  const servers = getMergedServers(projectDirectory)
+function findServerForExtension(
+  configRoot: string,
+  launchRoot: string,
+  ext: string,
+  commandPath: CommandPathPolicy,
+): ServerLookupResult {
+  const servers = getMergedServers(configRoot)
 
   for (const server of servers) {
-    if (server.extensions.includes(ext) && isServerInstalled(server.command, projectDirectory)) {
+    if (!server.extensions.includes(ext)) continue
+    const launch = prepareLspLaunch(server, launchRoot, commandPath)
+    if (launch) {
       return {
         status: "found",
         server: {
@@ -773,6 +774,7 @@ function findServerForExtension(projectDirectory: string, ext: string): ServerLo
           env: server.env,
           initialization: server.initialization,
         },
+        launch,
       }
     }
   }
@@ -786,6 +788,7 @@ function findServerForExtension(projectDirectory: string, ext: string): ServerLo
           command: server.command,
           extensions: server.extensions,
         },
+        launchRoot,
         installHint: LSP_INSTALL_HINTS[server.id] || `Install '${server.command[0]}' and ensure it's in your PATH`,
       }
     }
@@ -828,10 +831,15 @@ function findWorkspaceRoot(filePath: string): string {
 
 function formatServerLookupError(result: Exclude<ServerLookupResult, { status: "found" }>): string {
   if (result.status === "not_installed") {
+    const command = result.server.command[0] ?? "<empty command>"
+    const resolvedRelative = !isAbsolute(command) && (command.includes("/") || command.includes("\\"))
+      ? resolve(result.launchRoot, command)
+      : undefined
     return [
       `LSP server '${result.server.id}' is configured but NOT INSTALLED.`,
       "",
-      `Command not found: ${result.server.command[0]}`,
+      `Executable unavailable in the effective LSP launch environment: ${command}`,
+      ...(resolvedRelative ? [`Resolved workspace-relative path: ${resolvedRelative}`] : []),
       "",
       "To install:",
       `  ${result.installHint}`,
@@ -860,10 +868,6 @@ type UnifiedProcess = {
   exitCode: number | null
   exited: Promise<number>
   kill(signal?: string): void
-}
-
-function shouldUseNodeSpawn(): boolean {
-  return process.platform === "win32"
 }
 
 function validateCwd(cwd: string): { valid: boolean; error?: string } {
@@ -968,19 +972,15 @@ function wrapNodeProcess(proc: ChildProcess): UnifiedProcess {
   }
 }
 
-function spawnProcess(
-  command: string[],
-  options: { cwd: string; env: Record<string, string | undefined> }
-): UnifiedProcess {
-  const validation = validateCwd(options.cwd)
+function spawnProcess(launch: LspLaunchSpec): UnifiedProcess {
+  const validation = validateCwd(launch.cwd)
   if (!validation.valid) {
     throw new Error(`[LSP] ${validation.error}`)
   }
 
-  const [cmd, ...args] = command
-  const proc = nodeSpawn(cmd!, args, {
-    cwd: options.cwd,
-    env: options.env as NodeJS.ProcessEnv,
+  const proc = nodeSpawn(launch.executable, launch.args, {
+    cwd: launch.cwd,
+    env: launch.env,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     shell: process.platform === "win32",
@@ -1016,6 +1016,7 @@ type JsonRpcErrorResponse = {
 type JsonRpcMessage = JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcSuccessResponse | JsonRpcErrorResponse
 
 class LSPClientTransport {
+  protected readonly root: string
   protected proc: UnifiedProcess | null = null
   protected readonly stderrBuffer: string[] = []
   protected processExited = false
@@ -1030,23 +1031,14 @@ class LSPClientTransport {
   private readLoopStarted = false
 
   constructor(
-    protected root: string,
     protected server: ResolvedServer,
-    protected commandPath: CommandPathPolicy,
-  ) {}
+    protected launch: LspLaunchSpec,
+  ) {
+    this.root = launch.cwd
+  }
 
   async start(): Promise<void> {
-    const env = { ...process.env, ...this.server.env }
-    const pathValue = process.platform === "win32" ? env.PATH ?? env.Path ?? "" : env.PATH ?? ""
-    const spawnPath = [pathValue, ...getLspServerAdditionalPathBases(this.root)].filter(Boolean).join(delimiter)
-    if (process.platform === "win32" && env.Path !== undefined) env.Path = spawnPath
-    env.PATH = spawnPath
-    const spawnEnv = applyCommandPath(env, this.commandPath)
-
-    this.proc = spawnProcess(this.server.command, {
-      cwd: this.root,
-      env: spawnEnv,
-    })
+    this.proc = spawnProcess(this.launch)
 
     this.startStderrReading()
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
@@ -1497,10 +1489,11 @@ export class LSPServerManager {
     }
   }
 
-  async getClient(root: string, server: ResolvedServer, commandPath: CommandPathPolicy): Promise<LSPClient> {
+  async getClient(server: ResolvedServer, launch: LspLaunchSpec): Promise<LSPClient> {
     if (this.closePromise) throw new Error("LSP server manager is closing")
     this.startCleanupTimer()
 
+    const root = launch.cwd
     const key = this.key(root, server.id)
     let managed = this.clients.get(key)
 
@@ -1541,7 +1534,7 @@ export class LSPServerManager {
       }
     }
 
-    const client = new LSPClient(root, server, commandPath)
+    const client = new LSPClient(server, launch)
     const initPromise = (async () => {
       await client.start()
       await client.initialize()
@@ -1624,13 +1617,13 @@ async function withLspClient<T>(
     throw new Error("Directory paths are not supported by this LSP tool. Use lsp_diagnostics with the 'extension' parameter for directory diagnostics.")
   }
 
-  const result = findServerForExtension(projectDirectory, extname(absPath))
+  const root = findWorkspaceRoot(absPath)
+  const result = findServerForExtension(projectDirectory, root, extname(absPath), commandPath)
   if (result.status !== "found") {
     throw new Error(formatServerLookupError(result))
   }
 
-  const root = findWorkspaceRoot(absPath)
-  const client = await manager.getClient(root, result.server, commandPath)
+  const client = await manager.getClient(result.server, result.launch)
   try {
     return await fn(client)
   } catch (error) {
@@ -1897,7 +1890,8 @@ async function aggregateDiagnosticsForDirectory(
     throw new Error(`Directory does not exist: ${absDir}`)
   }
 
-  const serverResult = findServerForExtension(projectDirectory, extension)
+  const root = findWorkspaceRoot(absDir)
+  const serverResult = findServerForExtension(projectDirectory, root, extension, commandPath)
   if (serverResult.status !== "found") {
     throw new Error(formatServerLookupError(serverResult))
   }
@@ -1910,10 +1904,9 @@ async function aggregateDiagnosticsForDirectory(
     return [`Directory: ${absDir}`, `Extension: ${extension}`, "Files scanned: 0", `No files found with extension \"${extension}\".`].join("\n")
   }
 
-  const root = findWorkspaceRoot(absDir)
   const allDiagnostics: Array<{ filePath: string; diagnostic: Diagnostic }> = []
   const fileErrors: Array<{ file: string; error: string }> = []
-  const client = await manager.getClient(root, serverResult.server, commandPath)
+  const client = await manager.getClient(serverResult.server, serverResult.launch)
 
   try {
     for (const file of filesToProcess) {

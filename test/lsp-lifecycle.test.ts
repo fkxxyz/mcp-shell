@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ class RecordingLspManager extends LSPServerManager {
   getClientCalls = 0;
   releaseClientCalls = 0;
   closeCalls = 0;
+  launches: Array<{ cwd: string; executable: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
 
   private readonly fakeClient = {
     async documentSymbols() {
@@ -23,8 +24,9 @@ class RecordingLspManager extends LSPServerManager {
     },
   };
 
-  override async getClient(_root: string, _server: any, _commandPath: any): Promise<any> {
+  override async getClient(_server: any, launch: any): Promise<any> {
     this.getClientCalls++;
+    this.launches.push(launch);
     return this.fakeClient;
   }
 
@@ -115,11 +117,23 @@ test("each application runtime owns and closes only its LSP manager", async () =
 test("MCP sessions share the application-scoped LSP manager", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-shell-lsp-shared-"));
   const project = join(dir, "project");
-  const projectBin = join(project, "node_modules", ".bin");
-  await mkdir(projectBin, { recursive: true });
+  const projectConfig = join(project, ".pi");
+  const userBin = join(dir, "user-bin");
+  const pinnedExecutable = join(userBin, "mcp-shell-test-language-server");
+  await mkdir(projectConfig, { recursive: true });
+  await mkdir(userBin, { recursive: true });
   await writeFile(join(project, "package.json"), "{}\n");
   await writeFile(join(project, "example.ts"), "const symbol = 1;\n");
-  await writeFile(join(projectBin, "typescript-language-server"), "");
+  await writeFile(pinnedExecutable, "#!/bin/sh\n");
+  await chmod(pinnedExecutable, 0o755);
+  await writeFile(join(projectConfig, "lsp-tools.json"), JSON.stringify({
+    lsp: {
+      pinned: {
+        command: ["mcp-shell-test-language-server", "--stdio"],
+        extensions: [".ts"],
+      },
+    },
+  }));
 
   const manager = new RecordingLspManager();
   const runtime = await createApp(makeLocalConfig(dir), {
@@ -166,4 +180,89 @@ test("MCP sessions share the application-scoped LSP manager", async () => {
   }
 
   assert.equal(manager.closeCalls, 1);
+});
+
+test("LSP selection resolves executables from the effective launch environment", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-lsp-resolution-"));
+  const project = join(dir, "project");
+  const projectConfig = join(project, ".pi");
+  const userBin = join(dir, "user-bin");
+  const envBin = join(dir, "env-bin");
+  const toolsDir = join(project, "tools");
+  const pinnedExecutable = join(userBin, "mcp-shell-test-language-server");
+  const envExecutable = join(envBin, "mcp-shell-env-language-server");
+  const relativeExecutable = join(toolsDir, "relative-language-server");
+  await mkdir(projectConfig, { recursive: true });
+  await mkdir(userBin, { recursive: true });
+  await mkdir(envBin, { recursive: true });
+  await mkdir(toolsDir, { recursive: true });
+  await writeFile(join(project, "package.json"), "{}\n");
+  await writeFile(join(project, "example.ts"), "const symbol = 1;\n");
+  await writeFile(join(project, "example.foo"), "symbol\n");
+  await writeFile(join(project, "example.bar"), "symbol\n");
+  for (const executable of [pinnedExecutable, envExecutable, relativeExecutable]) {
+    await writeFile(executable, "#!/bin/sh\n");
+    await chmod(executable, 0o755);
+  }
+  await writeFile(join(projectConfig, "lsp-tools.json"), JSON.stringify({
+    lsp: {
+      pinned: {
+        command: ["mcp-shell-test-language-server", "--stdio"],
+        extensions: [".ts"],
+      },
+      env: {
+        command: ["mcp-shell-env-language-server", "--stdio"],
+        extensions: [".foo"],
+        env: { PATH: envBin },
+      },
+      relative: {
+        command: ["./tools/relative-language-server", "--stdio"],
+        extensions: [".bar"],
+      },
+    },
+  }));
+
+  const manager = new RecordingLspManager();
+  const runtime = await createApp(makeLocalConfig(dir), {
+    skills: isolatedSkills(dir),
+    lspManager: manager,
+  });
+  const { server, baseUrl } = await listen(runtime);
+  const client = new Client({ name: "lsp-resolution", version: "1.0.0" });
+
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
+    const created = await client.callTool({ name: "create_shell", arguments: { cwd: project } });
+    const shellId = (created.structuredContent as { shell_id?: unknown } | undefined)?.shell_id;
+    assert.equal(typeof shellId, "number");
+
+    for (const filePath of ["example.ts", "example.foo", "example.bar"]) {
+      const result = await client.callTool({
+        name: "lsp_symbols",
+        arguments: {
+          shell_id: shellId,
+          filePath,
+          scope: "document",
+        },
+      });
+      const text = (result.content as Array<{ type: string; text?: string }>)
+        .filter((item) => item.type === "text")
+        .map((item) => item.text ?? "")
+        .join("\n");
+      assert.match(text, /No symbols found/);
+    }
+
+    assert.equal(manager.getClientCalls, 3);
+    assert.equal(manager.releaseClientCalls, 3);
+    assert.equal(manager.launches[0]?.cwd, project);
+    assert.equal(manager.launches[0]?.executable, pinnedExecutable);
+    assert.deepEqual(manager.launches[0]?.args, ["--stdio"]);
+    assert.equal(manager.launches[1]?.executable, envExecutable);
+    assert.equal(manager.launches[2]?.executable, relativeExecutable);
+  } finally {
+    await client.close().catch(() => {});
+    await closeServer(server);
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
