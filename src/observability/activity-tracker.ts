@@ -1,10 +1,8 @@
 import type {
   FinishedToolCallSummary,
   RunningToolCall,
-  ToolCallIndexEntry,
   ToolCallSummary,
 } from "./tool-call.js";
-import { summaryFromIndex } from "./tool-call.js";
 
 export type ActivityEvent =
   | { type: "tool_call.started"; call: ToolCallSummary }
@@ -53,14 +51,8 @@ export class ActivityTracker {
     this.maxRecentPerWorkspace = Math.min(maxRecentPerWorkspace, maxCompleted);
   }
 
-  bootstrap(
-    entries: ToolCallIndexEntry[],
-    payloadAvailable: (entry: ToolCallIndexEntry) => boolean = () => true,
-  ): void {
-    for (const entry of entries) {
-      const summary = summaryFromIndex(entry, payloadAvailable(entry));
-      this.applyFinished(summary, false);
-    }
+  bootstrap(calls: FinishedToolCallSummary[]): void {
+    for (const call of calls) this.applyFinished(call, false);
   }
 
   started(call: RunningToolCall): void {
@@ -84,11 +76,11 @@ export class ActivityTracker {
     this.applyFinished(call, true);
   }
 
-  markPayloadsEvicted(files: string[]): void {
-    if (files.length === 0) return;
-    const evicted = new Set(files);
+  markCallsEvicted(callIds: string[]): void {
+    if (callIds.length === 0) return;
+    const evicted = new Set(callIds);
     for (const summary of this.completed) {
-      if (summary.payloadFile && evicted.has(summary.payloadFile)) {
+      if (evicted.has(summary.id)) {
         summary.payloadAvailable = false;
       }
     }
@@ -166,21 +158,6 @@ export class ActivityTracker {
     return { snapshot: this.snapshot(), feed };
   }
 
-  listShellCalls(shellId: number, limit: number, beforeId?: string): ToolCallSummary[] {
-    let start = 0;
-    if (beforeId) {
-      const index = this.completed.findIndex((call) => call.id === beforeId);
-      if (index >= 0) start = index + 1;
-    }
-
-    const result: ToolCallSummary[] = [];
-    for (let i = start; i < this.completed.length && result.length < limit; i++) {
-      const call = this.completed[i]!;
-      if (call.shellId === shellId) result.push(cloneSummary(call));
-    }
-    return result;
-  }
-
   getCall(id: string): ToolCallSummary | undefined {
     const call = this.byId.get(id);
     return call ? cloneSummary(call) : undefined;
@@ -206,7 +183,6 @@ export class ActivityTracker {
       durationMs: call.durationMs,
       status: call.status,
       payloadAvailable: call.payloadAvailable,
-      payloadFile: call.payloadFile,
     };
     this.byId.set(call.id, summary);
 

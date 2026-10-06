@@ -11,7 +11,7 @@ import { createMcpRouter } from "../mcp/routes.js";
 import { ActivityQuery } from "../observability/activity-query.js";
 import { ActivityTracker } from "../observability/activity-tracker.js";
 import { ToolCallRecorder } from "../observability/tool-call-recorder.js";
-import { ToolLogStore } from "../observability/tool-log-store.js";
+import { ToolHistoryStore } from "../observability/tool-history-store.js";
 import { ShellStore } from "../shell-store.js";
 import { SkillCatalog } from "../skills.js";
 import { DrainGate } from "../runtime/drain-gate.js";
@@ -54,15 +54,12 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
 
   const shells = await ShellStore.open(config.paths.configDir, config.paths.shellsDbFile);
   const skills = dependencies.skills ?? new SkillCatalog();
-  const logs = new ToolLogStore(config.toolLogs.dir, config.toolLogs.maxCalls);
+  const logs = new ToolHistoryStore(config.toolLogs.dir, config.toolLogs.maxCalls);
   const activityHistoryCalls = Math.min(config.toolLogs.maxCalls, MAX_ACTIVITY_HISTORY_CALLS);
   const activity = new ActivityTracker(activityHistoryCalls);
   try {
     await logs.initialize();
-    activity.bootstrap(
-      await logs.readRecent(activityHistoryCalls),
-      (entry) => logs.isPayloadRetained(entry.file),
-    );
+    activity.bootstrap(logs.readRecent(activityHistoryCalls));
   } catch (error) {
     console.error("Failed to initialize tool activity history:", error);
   }
@@ -146,6 +143,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
     await requests.drained();
     await sessions.close();
     if (authState) await authState.persist();
+    logs.close();
     shells.close();
   };
 

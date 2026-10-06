@@ -55,7 +55,7 @@ ToolCallRecorder is the single control point for recorded tool invocation lifecy
 3. publish the running call to ActivityTracker;
 4. execute the original tool operation;
 5. construct the final success or error record with the complete input;
-6. ask ToolLogStore to persist the completed record;
+6. ask ToolHistoryStore to persist the completed record and bounded input preview;
 7. publish the completed state to ActivityTracker; and
 8. preserve the original tool result or original tool error.
 
@@ -73,51 +73,33 @@ Unknown shell_id failures remain observable calls: the requested Shell ID is kno
 
 create_shell uses the general recorder rather than Shell-aware invocation. Its requested cwd is available while running; after success the completed call may also include the created shell_id.
 
-## ToolLogStore
+## ToolHistoryStore
 
-ToolLogStore owns persistent tool-log mechanics:
+ToolHistoryStore is the durable authority for completed tool-call history. It owns:
 
-- gzip payload files;
-- append-only lightweight index entries;
-- atomic payload publication;
-- count-bounded payload retention;
-- recent-index tail reads;
-- payload retrieval; and
-- compatibility parsing for older index entries.
+- compact SQLite metadata in `history.db`;
+- date-sharded gzip payload files under `payloads/YYYY/MM/DD/`;
+- atomic payload publication before metadata visibility;
+- count-bounded retention of complete call history;
+- indexed Shell-history pagination and recent-summary reads;
+- full payload retrieval by call ID; and
+- one-way import of the legacy `index.jsonl` plus `calls/*.json.gz` representation.
 
 Completed records are durable evidence. Running calls are not persisted merely for the UI, avoiding recovery semantics for orphaned running records after process termination.
 
-The initial backing format remains gzip payloads plus index.jsonl. A query database is not introduced until measured startup or query costs justify it. Consumers depend on ToolLogStore, not JSONL layout, so the backing index can change later without changing tool execution or HTTP contracts.
+SQLite metadata stores identity, chronology, Shell/workspace identity, status, stored size, payload location, and the bounded input preview. Full input, output, and serialized errors remain in gzip payloads and are fetched only when a specific call is opened. Metadata and payload retire together under `TOOL_LOG_MAX_CALLS`, so preview lifetime cannot exceed the retained complete call.
 
-New lightweight index entries carry enough identity for workspace activity without decompressing payloads:
+Payload bytes stay on asynchronous filesystem I/O rather than becoming synchronous `node:sqlite` BLOB writes. The SQLite index supplies durable ordering and lookup without loading retained filenames into memory or enumerating payload directories during normal startup. Metadata uses SQLite WAL mode with `synchronous=NORMAL`: tool history remains transactionally consistent, while the newest history may be lost on sudden host power loss because observability is explicitly best-effort relative to host actions.
 
-    id
-    sequence
-    shell_id?
-    cwd?
-    started_at
-    finished_at
-    duration_ms
-    session?
-    actor?
-    tool
-    status
-    stored_bytes
-    file
-
-Full input, output, and serialized errors remain in the gzip payload and are fetched only when a specific call is opened.
-
-The append-only index intentionally does not persist input previews. Its metadata currently has no retirement lifecycle independent of payload retention, so storing input-derived text there would make fragments outlive the corresponding retained payload. As a consequence, summaries restored from the index after process restart may lack an input preview even while a retained payload still contains the complete input.
-
-Older index entries lacking shell_id or cwd remain valid log history. Startup does not decompress old payloads merely to backfill workspace identity or input previews.
+Legacy import preserves only retained payload-backed calls. Historical metadata whose payload was already removed by the old retention model is intentionally not promoted into the new durable authority. Malformed legacy payloads are moved to `legacy-rejected/` so a bad source record is diagnosed once and no longer prevents migration convergence on later restarts.
 
 ## Bounded Startup and Runtime State
 
-An append-only index must not make startup cost proportional to installation lifetime. ToolLogStore therefore reads the recent index window from the end of the file in bounded chunks and stops after collecting the required number of valid entries.
+Durable retention depth must not determine live-activity memory. ToolHistoryStore opens the indexed metadata store, converges retained count if configuration decreased, and reads only the bounded recent summaries needed for Activity bootstrap.
 
 The in-memory activity-history window is independently capped at 10,000 completed calls, even when `TOOL_LOG_MAX_CALLS` is configured much higher for payload retention. Raising durable payload retention therefore does not proportionally increase activity bootstrap time or steady-state activity memory.
 
-Malformed historical lines are reported and skipped instead of preventing MCP startup. Observability remains subordinate to host-tool availability.
+Legacy source corruption is quarantined and diagnosed without making valid retained history unreadable. Infrastructure/storage failures do not quarantine otherwise valid history; they fail initialization so the process enters a degraded history state. That same process does not repeatedly rerun initialization or migration on each tool completion, and continuous persistence failure is reported once until recovery. Observability remains subordinate to host-tool availability.
 
 ActivityTracker owns only bounded in-process state:
 
@@ -129,15 +111,15 @@ ActivityTracker owns only bounded in-process state:
 
 Activity snapshots derive per-Shell recent activity facts from the same bounded completed-call history plus current running calls. This supporting projection carries `shell_id`, latest lifecycle time, and running-call count so the browser can calculate active-Shell counts without querying the durable Shell inventory or introducing a second mutable activity authority.
 
-Completed-call retirement is one lifecycle across the projection: when a call leaves the bounded global history it also leaves any workspace recent-call projection, and a workspace with neither running nor retained recent calls is removed. This prevents UI-visible calls or workspaces from outliving the queryable activity window.
+Completed-call retirement is one lifecycle inside the live projection: when a call leaves the bounded global recent window it also leaves any workspace recent-call projection, and a workspace with neither running nor retained recent calls is removed. Durable completed history may remain queryable long after that live/recent projection has forgotten the call.
 
 It does not read gzip payloads, enumerate Shells, persist workspace state, or decide visual ranking tiers.
 
 ## Query Composition
 
-ActivityQuery composes read models from ActivityTracker, ShellStore, and ToolLogStore.
+ActivityQuery composes read models from ActivityTracker, ShellStore, and ToolHistoryStore.
 
-ShellStore remains authoritative for Shell existence and provides bounded cwd -> Shells queries needed by the UI. Tool logs are not used to infer the complete Shell inventory.
+ShellStore remains authoritative for Shell existence and provides bounded cwd -> Shells queries needed by the UI. ToolHistoryStore is authoritative for retained completed-call history and latest retained Shell activity. ActivityTracker is authoritative only for running/recent in-process lifecycle state. Tool history is not used to infer the complete Shell inventory.
 
 HTTP handlers delegate read-model assembly to ActivityQuery; they do not accumulate cross-store query logic.
 
@@ -260,7 +242,8 @@ The current Web authority is read-only. Adding any browser mutation is an explic
       observability/
         tool-call.ts
         tool-call-recorder.ts
-        tool-log-store.ts
+        tool-history-store.ts
+        legacy-tool-log-import.ts
         activity-tracker.ts
         activity-query.ts
       http/
@@ -290,7 +273,7 @@ The current implementation does not introduce:
 - WebSocket transport;
 - durable event replay;
 - a second workspace database;
-- SQLite migration for tool-log metadata without measured need;
+- an external database service or independent history worker;
 - server-side activity scores or tiers;
 - SSR or a full-stack React framework;
 - independently deployed frontend services;

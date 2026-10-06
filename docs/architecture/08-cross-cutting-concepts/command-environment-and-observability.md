@@ -51,6 +51,6 @@ The user override directory is first by design. Therefore these wrappers improve
 
 Each recorded call receives a generated ID, sequence number, start/end timestamps, duration, tool name, input, outcome, and either output or serialized error. Session and actor context are attached when available.
 
-Complete call records are gzip-compressed under the configured log directory. `index.jsonl` retains lightweight metadata. Payload retention is count-bounded by `TOOL_LOG_MAX_CALLS`; index history is append-only in the current implementation.
+Complete call records are gzip-compressed under date-sharded payload directories. `history.db` stores compact indexed metadata and bounded input previews. `TOOL_LOG_MAX_CALLS` bounds complete retained calls: metadata and payload retire together rather than maintaining independent lifetimes.
 
 Logging is best-effort with respect to tool semantics: persistence errors are reported to stderr but do not replace a successful tool result.

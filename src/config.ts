@@ -141,7 +141,7 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "OAUTH_RESOURCE_ALIASES=",
       "ADMIN_PASSWORD=CHANGE_ME",
       "PORT=3000",
-      "# Tool call history. Payloads are gzip-compressed and the oldest calls are removed by count.",
+      "# Tool call history. Complete calls are retained by count; full payloads remain gzip-compressed.",
       "TOOL_LOG_DIR=",
       "TOOL_LOG_MAX_CALLS=10000",
       "# Optional read-only Web Console. When blank, /console and /api are not mounted.",

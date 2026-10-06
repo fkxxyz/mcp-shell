@@ -105,9 +105,9 @@ Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root 
 
 ## Observability (`src/observability/`)
 
-`ToolCallRecorder` owns the recorded invocation lifecycle. `ToolLogStore` owns gzip payload persistence, lightweight index access, and bounded payload retention. `ActivityTracker` owns bounded live state and subscribers. `ActivityQuery` composes UI read models from activity, Shell, and retained-log facts.
+`ToolCallRecorder` owns the recorded invocation lifecycle. `ToolHistoryStore` owns durable completed-call history: SQLite metadata, sharded gzip payloads, retention, migration, and history queries. `ActivityTracker` owns bounded live/recent state and subscribers. `ActivityQuery` composes UI read models from durable Shell/history authorities plus live Activity state.
 
-Complete call payloads remain gzip-compressed and the lightweight index gains Shell/workspace identity for new records. Startup tail-reads only a bounded recent index window rather than scanning installation-lifetime history. Older entries without Shell/workspace identity remain valid logs but are not decompressed solely for activity reconstruction.
+Complete call payloads remain gzip-compressed in date-sharded files while `history.db` stores compact indexed metadata and bounded previews. Startup reads only the bounded recent summary window needed for Activity bootstrap; retained Shell history remains queryable independently of that live/recent window.
 
 The activity projection groups calls by Shell root `cwd` while preserving `shell_id` as execution-context identity. Running calls are process-local; only completed records are persisted. Logging and activity failures remain best-effort and do not replace original tool semantics.
 
@@ -133,9 +133,9 @@ http/app -> auth + mcp + shell-store + skills + observability + activity-http
 mcp -> tools + shell-store + skills + tool-call-recorder + host coordination
 shell -> shell-store + skills
 tools -> shell-store + skills + tool-call-recorder + host coordination
-tool-call-recorder -> tool-log-store + activity-tracker
+tool-call-recorder -> tool-history-store + activity-tracker
 activity-http -> activity-query + activity-tracker
-activity-query -> shell-store + tool-log-store + activity-tracker
+activity-query -> shell-store + tool-history-store + activity-tracker
 basic/lsp/read-image -> command-path
 web -> browser contracts + /api HTTP/SSE only
 ```

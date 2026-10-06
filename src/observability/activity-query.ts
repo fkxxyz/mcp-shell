@@ -8,7 +8,7 @@ import type {
 } from "../contracts/activity.js";
 import type { ActivitySnapshot, ActivityTracker } from "./activity-tracker.js";
 import type { ToolCallSummary } from "./tool-call.js";
-import type { ToolLogStore } from "./tool-log-store.js";
+import type { ToolHistoryCursor, ToolHistoryStore } from "./tool-history-store.js";
 
 export class ActivityQueryError extends Error {
   constructor(
@@ -23,7 +23,7 @@ export class ActivityQueryError extends Error {
 export class ActivityQuery {
   constructor(
     private readonly shells: ShellStore,
-    private readonly logs: ToolLogStore,
+    private readonly logs: ToolHistoryStore,
     private readonly activity: ActivityTracker,
   ) {}
 
@@ -69,48 +69,45 @@ export class ActivityQuery {
       throw new ActivityQueryError(404, "shell_not_found", `Unknown shell_id: ${shellId}`);
     }
 
-    const beforeId = before ? decodeCursor(before, "call") : undefined;
-    if (beforeId) {
-      const cursor = this.activity.getCall(beforeId);
-      if (!cursor || cursor.shellId !== shellId) {
-        throw new ActivityQueryError(400, "invalid_cursor", "Call cursor does not belong to this shell");
-      }
-    }
-
-    const calls = this.activity.listShellCalls(shellId, limit, beforeId);
+    const cursor = before ? decodeCallCursor(before, shellId) : undefined;
+    const page = this.logs.listShellCalls(shellId, limit, cursor);
     return {
       shell: {
         shell_id: shell.id,
         cwd: shell.cwd,
         created_at: new Date(shell.createdAt).toISOString(),
       },
-      items: calls.map(toApiSummary),
-      next_cursor: calls.length === limit ? encodeCursor("call", calls[calls.length - 1]!.id) : null,
+      items: page.items.map(toApiSummary),
+      next_cursor: page.nextCursor ? encodeCallCursor(shellId, page.nextCursor) : null,
     };
   }
 
   async getToolCall(callId: string): Promise<ToolCallDetailDto> {
     const summary = this.activity.getCall(callId);
-    if (!summary) {
-      throw new ActivityQueryError(404, "tool_call_not_found", "Unknown tool call");
-    }
-    if (summary.status === "running") {
+    if (summary?.status === "running") {
       throw new ActivityQueryError(409, "tool_call_running", "Tool call has not finished");
     }
-    if (!summary.payloadAvailable || !summary.payloadFile) {
+    if (summary && summary.payloadAvailable === false) {
       throw new ActivityQueryError(410, "tool_call_payload_unavailable", "Tool call payload is no longer available");
     }
 
-    const record = await this.logs.readPayload(summary.payloadFile);
-    if (!record) {
+    const result = await this.logs.readCall(callId);
+    if (result.kind === "payload_missing") {
       throw new ActivityQueryError(410, "tool_call_payload_unavailable", "Tool call payload is no longer available");
     }
-    return record;
+    if (result.kind === "not_found") {
+      throw new ActivityQueryError(
+        summary ? 410 : 404,
+        summary ? "tool_call_payload_unavailable" : "tool_call_not_found",
+        summary ? "Tool call payload is no longer available" : "Unknown tool call",
+      );
+    }
+    return result.record;
   }
 
   private latestShellEventAt(shellId: number): string | null {
-    const calls = this.activity.listShellCalls(shellId, 1);
-    return calls[0]?.finishedAt ? new Date(calls[0].finishedAt).toISOString() : null;
+    const call = this.logs.latestShellCall(shellId);
+    return call?.finishedAt ? new Date(call.finishedAt).toISOString() : null;
   }
 }
 
@@ -142,6 +139,35 @@ function decodeCursor(cursor: string, kind: "shell" | "call"): string {
     const value = Buffer.from(cursor.slice(prefix.length), "base64url").toString("utf8");
     if (!value) throw new Error("empty cursor");
     return value;
+  } catch {
+    throw new ActivityQueryError(400, "invalid_cursor", "Cursor is malformed");
+  }
+}
+
+function encodeCallCursor(shellId: number, cursor: ToolHistoryCursor): string {
+  return `call.${Buffer.from(JSON.stringify([
+    shellId,
+    cursor.startedAt,
+    cursor.sequence,
+    cursor.id,
+  ]), "utf8").toString("base64url")}`;
+}
+
+function decodeCallCursor(cursor: string, expectedShellId: number): ToolHistoryCursor {
+  const encoded = decodeCursor(cursor, "call");
+  try {
+    const parsed = JSON.parse(encoded) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 4) throw new Error("invalid cursor tuple");
+    const [shellId, startedAt, sequence, id] = parsed;
+    if (
+      shellId !== expectedShellId ||
+      typeof startedAt !== "number" || !Number.isFinite(startedAt) ||
+      typeof sequence !== "number" || !Number.isInteger(sequence) || sequence < 0 ||
+      typeof id !== "string" || !id
+    ) {
+      throw new Error("invalid cursor values");
+    }
+    return { startedAt, sequence, id };
   } catch {
     throw new ActivityQueryError(400, "invalid_cursor", "Cursor is malformed");
   }

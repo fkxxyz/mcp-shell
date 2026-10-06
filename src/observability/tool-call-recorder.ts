@@ -8,7 +8,7 @@ import type {
   ToolLogContext,
 } from "./tool-call.js";
 import { serializeToolError } from "./tool-call.js";
-import type { ToolLogStore } from "./tool-log-store.js";
+import type { ToolHistoryStore } from "./tool-history-store.js";
 
 export type RecordedCallContext = {
   tool: string;
@@ -34,9 +34,10 @@ export function toolLogActorFromToken(token: string): string {
 
 export class ToolCallRecorder {
   private sequence = 0;
+  private historyFailureReported = false;
 
   constructor(
-    private readonly logs: ToolLogStore,
+    private readonly logs: ToolHistoryStore,
     private readonly activity: ActivityTracker,
   ) {}
 
@@ -82,7 +83,7 @@ export class ToolCallRecorder {
         output,
       };
 
-      const persisted = await this.persistSafely(record);
+      const persisted = await this.persistSafely(record, inputPreview);
       this.publishFinished({
         id,
         tool: meta.tool,
@@ -93,11 +94,10 @@ export class ToolCallRecorder {
         finishedAt,
         durationMs: finishedAt - startedAt,
         status: "success",
-        payloadAvailable: persisted !== undefined,
-        payloadFile: persisted?.file,
+        payloadAvailable: persisted?.retained ?? false,
       });
-      if (persisted?.evictedFiles.length) {
-        this.markPayloadsEvictedSafely(persisted.evictedFiles);
+      if (persisted?.evictedCallIds.length) {
+        this.markCallsEvictedSafely(persisted.evictedCallIds);
       }
 
       return output;
@@ -120,7 +120,7 @@ export class ToolCallRecorder {
         error: serializeToolError(error),
       };
 
-      const persisted = await this.persistSafely(record);
+      const persisted = await this.persistSafely(record, inputPreview);
       this.publishFinished({
         id,
         tool: meta.tool,
@@ -131,11 +131,10 @@ export class ToolCallRecorder {
         finishedAt,
         durationMs: finishedAt - startedAt,
         status: "error",
-        payloadAvailable: persisted !== undefined,
-        payloadFile: persisted?.file,
+        payloadAvailable: persisted?.retained ?? false,
       });
-      if (persisted?.evictedFiles.length) {
-        this.markPayloadsEvictedSafely(persisted.evictedFiles);
+      if (persisted?.evictedCallIds.length) {
+        this.markCallsEvictedSafely(persisted.evictedCallIds);
       }
 
       throw error;
@@ -164,11 +163,19 @@ export class ToolCallRecorder {
     }
   }
 
-  private async persistSafely(record: ToolCallRecord) {
+  private async persistSafely(
+    record: ToolCallRecord,
+    inputPreview?: Record<string, unknown>,
+  ) {
     try {
-      return await this.logs.persist(record);
+      const persisted = await this.logs.persist(record, inputPreview);
+      this.historyFailureReported = false;
+      return persisted;
     } catch (error) {
-      console.error("Failed to persist tool log:", error);
+      if (!this.historyFailureReported) {
+        this.historyFailureReported = true;
+        console.error("Failed to persist tool log:", error);
+      }
       return undefined;
     }
   }
@@ -196,9 +203,9 @@ export class ToolCallRecorder {
     }
   }
 
-  private markPayloadsEvictedSafely(files: string[]): void {
+  private markCallsEvictedSafely(callIds: string[]): void {
     try {
-      this.activity.markPayloadsEvicted(files);
+      this.activity.markCallsEvicted(callIds);
     } catch (error) {
       console.error("Failed to update tool payload retention state:", error);
     }

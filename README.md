@@ -96,6 +96,8 @@ TOOL_LOG_MAX_CALLS=10000
 WEB_PASSWORD=
 ```
 
+`TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history. Each retained call keeps compact indexed metadata plus its compressed full payload; when the count is exceeded, the oldest complete calls retire by invocation start order.
+
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
 
 If a trusted ingress or tunnel presents a different canonical OAuth resource identifier for the same mcp-shell, set `OAUTH_RESOURCE_ALIASES` to a comma-separated list of exact HTTPS identifiers:
@@ -204,9 +206,12 @@ Important files and directories include:
 ~/.mcp-shell/env
 ~/.mcp-shell/state.json
 ~/.mcp-shell/shells.db
-~/.mcp-shell/tool-logs/
+~/.mcp-shell/tool-logs/history.db
+~/.mcp-shell/tool-logs/payloads/
 ~/.mcp-shell/bin/
 ```
+
+Tool history metadata is indexed in `history.db`; complete inputs, outputs, and errors remain gzip-compressed under date-sharded `payloads/` directories. Existing legacy tool-log payloads are imported automatically on first startup after upgrading. Malformed legacy payloads are moved to `~/.mcp-shell/tool-logs/legacy-rejected/` and diagnosed instead of being retried on every restart.
 
 `~/.mcp-shell/bin/` is the user command-override layer and is placed ahead of the repository's own `bin/` directory in `PATH`.
 

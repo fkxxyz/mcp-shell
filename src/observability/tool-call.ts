@@ -23,7 +23,6 @@ export type FinishedToolCallSummary = ToolCallIdentity & {
   durationMs: number;
   status: ToolCallStatus;
   payloadAvailable: boolean;
-  payloadFile?: string;
 };
 
 export type ToolCallSummary = RunningToolCall & {
@@ -31,7 +30,6 @@ export type ToolCallSummary = RunningToolCall & {
   durationMs?: number;
   status: "running" | ToolCallStatus;
   payloadAvailable?: boolean;
-  payloadFile?: string;
 };
 
 export type SerializedToolError = {
@@ -58,23 +56,6 @@ export type ToolCallRecord = {
   error?: SerializedToolError;
 };
 
-export type ToolCallIndexEntry = {
-  version?: number;
-  id: string;
-  sequence: number;
-  shell_id?: number;
-  cwd?: string;
-  started_at: string;
-  finished_at: string;
-  duration_ms: number;
-  session?: string;
-  actor?: string;
-  tool: string;
-  status: ToolCallStatus;
-  stored_bytes: number;
-  file: string;
-};
-
 export function serializeToolError(error: unknown): SerializedToolError {
   if (error instanceof Error) {
     return {
@@ -87,20 +68,5 @@ export function serializeToolError(error: unknown): SerializedToolError {
   return {
     name: "Error",
     message: String(error),
-  };
-}
-
-export function summaryFromIndex(entry: ToolCallIndexEntry, payloadAvailable = true): FinishedToolCallSummary {
-  return {
-    id: entry.id,
-    tool: entry.tool,
-    shellId: entry.shell_id,
-    cwd: entry.cwd,
-    startedAt: Date.parse(entry.started_at),
-    finishedAt: Date.parse(entry.finished_at),
-    durationMs: entry.duration_ms,
-    status: entry.status,
-    payloadAvailable,
-    payloadFile: payloadAvailable ? entry.file : undefined,
   };
 }

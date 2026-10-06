@@ -58,7 +58,7 @@ For a normal Shell-scoped tool:
 5. ActivityTracker updates its workspace projection before subscriber fan-out;
 6. the tool executes from the resolved Shell root;
 7. ToolCallRecorder builds the final success or error record with the complete input;
-8. ToolLogStore attempts durable persistence;
+8. ToolHistoryStore attempts durable persistence;
 9. ToolCallRecorder publishes tool_call.finished with the same preview and payload availability reflecting persistence outcome; and
 10. the original tool result or original tool error is returned to the MCP client.
 
@@ -90,8 +90,8 @@ An ACTIVE workspace does not move on every new event. Promotion from EARLIER mov
 When a workspace or Shell history page is opened:
 
 1. `/api/shells?cwd=...` obtains bounded Shell inventory from ShellStore;
-2. `/api/shells/:shell_id/calls` returns bounded call summaries with opaque cursor pagination; and
-3. `/api/tool-calls/:call_id` reads the retained gzip payload only when full input/output/error detail is requested.
+2. `/api/shells/:shell_id/calls` reads retained completed-call summaries from ToolHistoryStore with opaque durable cursor pagination; and
+3. `/api/tool-calls/:call_id` reads the retained gzip payload from ToolHistoryStore only when full input/output/error detail is requested.
 
 The browser follows returned cursors with an explicit Load more action so bounded API pages do not silently hide older retained history. Cursors are returned unchanged to the API and are never decoded by browser code.
 
@@ -101,26 +101,25 @@ Completed SSE events invalidate affected TanStack Query entries for Shell histor
 
 The live stream never carries full payloads by default.
 
-If metadata remains but the retained payload has been evicted, the API reports that detail is unavailable rather than reconstructing it from another source.
+If a recent Activity summary outlives its durable retained call, the API reports that detail is unavailable rather than reconstructing it from another source. Durable metadata itself is retired with its payload.
 
 ## Restart
 
 At process startup:
 
-1. ToolLogStore restores payload-retention state;
-2. it tail-reads only the bounded recent lightweight index window;
-3. compatible recent entries seed ActivityTracker; and
-4. HTTP/MCP serving starts with that recent projection available.
+1. ToolHistoryStore opens and validates `history.db`;
+2. retained legacy gzip payloads are imported once when the old layout exists;
+3. configured retention is converged and only the bounded recent summary window is read;
+4. those summaries seed ActivityTracker, including persisted bounded input previews; and
+5. HTTP/MCP serving starts with that recent projection available.
 
-The lightweight index does not persist input previews, because its current append-only lifetime can exceed retained payload lifetime. Restart-restored summaries therefore may format as `tool_name()` until new live calls populate previews. Old index entries lacking workspace identity remain valid log records and retained payloads are not decompressed solely to rebuild workspace identity or previews.
-
-Running calls are process-local and disappear on restart. Persisted completed calls and durable Shells remain.
+Running calls are process-local and disappear on restart. Retained completed calls remain queryable independently of the Activity bootstrap cap, and durable Shells remain.
 
 ## Failure Isolation
 
 - Tool-log persistence failure is reported but does not replace the original tool outcome.
 - Activity publication failure does not alter tool semantics.
-- Malformed historical index lines do not prevent server startup.
+- Malformed legacy payloads are diagnosed without invalidating already indexed history.
 - A slow activity browser cannot create unbounded subscriber memory.
 - A Web authentication failure does not reach Web API data.
 - Web Basic credentials cannot authorize `/mcp`.

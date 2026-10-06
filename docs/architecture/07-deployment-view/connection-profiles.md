@@ -103,11 +103,11 @@ If the tunnel or another trusted intermediary presents a canonical OAuth resourc
 
 ## Local Files and Permissions
 
-The process uses `~/.mcp-shell/` for configuration, token state, durable Shell state, user command overrides, and default tool logs. Configuration/state/log directories and sensitive state files are created with restrictive owner permissions where the implementation manages them.
+The process uses `~/.mcp-shell/` for configuration, token state, durable Shell state, user command overrides, and default tool history. Configuration/state/history directories and sensitive state files are created with restrictive owner permissions where the implementation manages them.
 
 `~/.mcp-shell/shells.db` stores Shell IDs and their roots. Agents create Shells explicitly with absolute roots; subsequent relative operations are resolved from the selected Shell rather than the process launch directory.
 
-Tool-call payloads and activity metadata can contain host paths, commands, file content, outputs, and errors. They are therefore treated as sensitive owner data even though the activity HTTP surface is read-only.
+`~/.mcp-shell/tool-logs/history.db` stores compact retained-history metadata and `~/.mcp-shell/tool-logs/payloads/` stores date-sharded gzip records. Tool-call payloads and activity metadata can contain host paths, commands, file content, outputs, and errors. They are therefore treated as sensitive owner data even though the activity HTTP surface is read-only.
 
 ## Lifecycle
 
