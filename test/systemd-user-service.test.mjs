@@ -54,13 +54,10 @@ test("uses XDG_CONFIG_HOME for the user unit when configured", () => {
 test("parses and validates effective lifecycle properties", () => {
   const output = [
     "LoadState=loaded",
-    "Type=simple",
     "KillSignal=15",
     "KillMode=mixed",
     "SendSIGKILL=yes",
     "TimeoutStopUSec=15s",
-    "Restart=on-failure",
-    "RestartUSec=5s",
     "NeedDaemonReload=no",
     "FragmentPath=/tmp/mcp-shell.service",
     "",
@@ -90,7 +87,28 @@ test("installer refuses unmanaged units unless replacement is explicit", async (
   await installService(fixture.options({ replaceExisting: true }));
   assert.equal(isManagedUnit(await readFile(fixture.target, "utf8")), true);
   assert.deepEqual(await readdir(join(fixture.home, ".config", "systemd", "user")), ["mcp-shell.service"]);
+  assert.equal(fixture.systemdAnalyzeCalls.length, 1);
+  assert.equal(fixture.systemdAnalyzeCalls[0][0], "verify");
   assert.deepEqual(fixture.systemctlCalls, [["--user", "daemon-reload"]]);
+});
+
+test("installer leaves the existing unit untouched when systemd rejects the rendered unit", async () => {
+  const fixture = await createFixture();
+  const original = `${MANAGED_MARKER}\n[Service]\nExecStart=\"/old/node\" \"/old/server.js\"\n`;
+  await mkdir(join(fixture.home, ".config", "systemd", "user"), { recursive: true });
+  await writeFile(fixture.target, original);
+
+  await assert.rejects(
+    installService(fixture.options({
+      runSystemdAnalyze: async () => {
+        throw new Error("invalid unit");
+      },
+    })),
+    /failed systemd-analyze verify/,
+  );
+
+  assert.equal(await readFile(fixture.target, "utf8"), original);
+  assert.equal(fixture.systemctlCalls.length, 0);
 });
 
 test("check validates installed paths and effective systemd state without requiring service activity", async () => {
@@ -100,13 +118,10 @@ test("check validates installed paths and effective systemd state without requir
 
   const effective = [
     "LoadState=loaded",
-    "Type=simple",
     "KillSignal=15",
     "KillMode=mixed",
     "SendSIGKILL=yes",
     "TimeoutStopUSec=15s",
-    "Restart=on-failure",
-    "RestartUSec=5s",
     "NeedDaemonReload=no",
     `FragmentPath=${fixture.target}`,
     "",
@@ -122,6 +137,27 @@ test("check validates installed paths and effective systemd state without requir
   assert.equal(fixture.systemctlCalls.length, 1);
   assert.equal(fixture.systemctlCalls[0][0], "--user");
   assert.equal(fixture.systemctlCalls[0][1], "show");
+});
+
+test("check ignores recommended restart policy when shutdown-critical properties are correct", async () => {
+  const fixture = await createFixture();
+  await installService(fixture.options());
+
+  const effective = [
+    "LoadState=loaded",
+    "KillSignal=15",
+    "KillMode=mixed",
+    "SendSIGKILL=yes",
+    "TimeoutStopUSec=15s",
+    "NeedDaemonReload=no",
+    `FragmentPath=${fixture.target}`,
+    "Restart=no",
+    "RestartUSec=37s",
+    "Type=exec",
+    "",
+  ].join("\n");
+
+  await checkService(fixture.options({ runSystemctl: async () => effective }));
 });
 
 test("canonical template keeps deployment policy narrow", async () => {
@@ -148,6 +184,7 @@ async function createFixture() {
   const entrypoint = join(repoRoot, "dist", "server", "mcp-shell.js");
   const target = join(home, ".config", "systemd", "user", "mcp-shell.service");
   const systemctlCalls = [];
+  const systemdAnalyzeCalls = [];
 
   await mkdir(join(repoRoot, "deploy", "systemd"), { recursive: true });
   await mkdir(join(repoRoot, "dist", "server"), { recursive: true });
@@ -161,6 +198,7 @@ async function createFixture() {
     entrypoint,
     target,
     systemctlCalls,
+    systemdAnalyzeCalls,
     options(overrides = {}) {
       return {
         repoRoot,
@@ -170,6 +208,10 @@ async function createFixture() {
         target,
         runSystemctl: async (args) => {
           systemctlCalls.push(args);
+          return "";
+        },
+        runSystemdAnalyze: async (args) => {
+          systemdAnalyzeCalls.push(args);
           return "";
         },
         ...overrides,

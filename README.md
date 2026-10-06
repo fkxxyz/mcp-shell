@@ -136,7 +136,7 @@ npm run service:check
 
 `service:install` renders the current Node executable and this checkout's `dist/server/mcp-shell.js` into the user unit, reloads systemd, and deliberately does not enable, start, or restart the service. If an older manually maintained `mcp-shell.service` already exists, review it and migrate explicitly with `npm run service:install -- --replace-existing`. The checkout used for installation remains the deployment root; reinstall the service before moving or deleting it.
 
-`service:check` verifies the installed executable paths and effective lifecycle settings, including the `KillMode=mixed` / 15-second outer stop boundary required for the application's three-second active-tool completion opportunity. `Type=simple` does not claim listener readiness when `systemctl start` or `restart` returns.
+`service:install` validates the rendered unit with `systemd-analyze verify` before replacing the installed file. `service:check` verifies the installed executable paths and effective shutdown-critical settings, including the `KillMode=mixed` / 15-second outer stop boundary required for the application's three-second active-tool completion opportunity. Restart policy remains a template default rather than a live correctness invariant. `Type=simple` does not claim listener readiness when `systemctl start` or `restart` returns.
 
 For remote mode, place an HTTPS reverse proxy or equivalent trusted ingress in front of the service.
 

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { access, chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -18,13 +18,10 @@ const UNIT_NAME = "mcp-shell.service";
 
 const expectedEffectiveProperties = {
   LoadState: "loaded",
-  Type: "simple",
   KillSignal: "15",
   KillMode: "mixed",
   SendSIGKILL: "yes",
   TimeoutStopUSec: "15s",
-  Restart: "on-failure",
-  RestartUSec: "5s",
   NeedDaemonReload: "no",
 };
 
@@ -117,6 +114,7 @@ export async function installService(options = {}) {
   const nodePath = options.nodePath ?? process.execPath;
   const target = options.target ?? userUnitPath(options);
   const runSystemctl = options.runSystemctl ?? systemctl;
+  const runSystemdAnalyze = options.runSystemdAnalyze ?? systemdAnalyze;
   const replaceExisting = options.replaceExisting ?? false;
   const templatePath = join(repoRoot, "deploy", "systemd", "mcp-shell.service.in");
   const entrypoint = resolve(repoRoot, "dist", "server", "mcp-shell.js");
@@ -138,6 +136,7 @@ export async function installService(options = {}) {
     );
   }
 
+  await verifyUnitWithSystemd(rendered, runSystemdAnalyze);
   await atomicWrite(target, rendered);
   await runSystemctl(["--user", "daemon-reload"]);
   return { target, nodePath, entrypoint, replacedExisting: existing !== undefined };
@@ -212,6 +211,25 @@ async function readOptional(path) {
 async function systemctl(args) {
   const { stdout } = await execFileAsync("systemctl", args, { encoding: "utf8" });
   return stdout;
+}
+
+async function systemdAnalyze(args) {
+  const { stdout } = await execFileAsync("systemd-analyze", args, { encoding: "utf8" });
+  return stdout;
+}
+
+async function verifyUnitWithSystemd(content, runSystemdAnalyze) {
+  const path = join(tmpdir(), `mcp-shell-${randomUUID()}.service`);
+  try {
+    await writeFile(path, content, { encoding: "utf8", mode: 0o600 });
+    await runSystemdAnalyze(["verify", path]);
+  } catch (error) {
+    throw new Error("Rendered systemd unit failed systemd-analyze verify", { cause: error });
+  } finally {
+    await unlink(path).catch((cleanupError) => {
+      if (cleanupError?.code !== "ENOENT") console.warn(`Failed to remove ${path}:`, cleanupError);
+    });
+  }
 }
 
 function countOccurrences(text, needle) {

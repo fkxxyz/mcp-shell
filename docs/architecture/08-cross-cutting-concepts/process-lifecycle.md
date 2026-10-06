@@ -67,7 +67,7 @@ TimeoutStopSec=15s
 
 `Type=simple` deliberately means that successful `systemctl start` or `restart` reports process creation, not application readiness. The current architecture has no systemd-specific readiness protocol; add one only when an operator contract requires restart completion to prove listener readiness.
 
-`npm run service:check` verifies the installed managed unit, configured executable paths, pending daemon reload state, and effective lifecycle properties reported by systemd. Repository tests verify the template and installer/checker logic without operating the developer's real user service.
+Before replacing the installed unit, `npm run service:install` asks systemd itself to parse the rendered unit with `systemd-analyze verify`; a rejected render never replaces the current unit. `npm run service:check` then verifies the installed managed unit, configured executable paths, pending daemon reload state, and effective shutdown-critical properties reported by systemd. Restart policy and `Type=simple` remain canonical template defaults rather than live correctness checks. Repository tests verify the template and installer/checker logic without operating the developer's real user service.
 
 ## Restart Semantics
 
