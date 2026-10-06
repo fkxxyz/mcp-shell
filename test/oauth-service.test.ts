@@ -41,7 +41,11 @@ test("validateAuthorizeParams rejects client, redirect, PKCE, resource and respo
   assert.equal(oauth.validateAuthorizeParams({ ...base, clientId: "other" }).ok, false);
   assert.equal(oauth.validateAuthorizeParams({ ...base, redirectUri: "https://evil.example/callback" }).ok, false);
   assert.equal(oauth.validateAuthorizeParams({ ...base, codeChallengeMethod: "plain" }).ok, false);
-  assert.equal(oauth.validateAuthorizeParams({ ...base, resource: "https://other.example" }).ok, false);
+  // Any absolute http(s) resource is accepted (tunnel-fronted clients present
+  // the tunnel's canonical resource URL); malformed resources are rejected.
+  assert.equal(oauth.validateAuthorizeParams({ ...base, resource: "https://other.example" }).ok, true);
+  assert.equal(oauth.validateAuthorizeParams({ ...base, resource: "not-a-url" }).ok, false);
+  assert.equal(oauth.validateAuthorizeParams({ ...base, resource: "" }).ok, false);
 });
 
 test("redirect allowlist supports exact, bare exact, and prefix rules", async (t) => {
@@ -133,7 +137,7 @@ test("refresh token rotates and cannot be replayed", async (t) => {
   assert.equal(oauth.refreshAccessToken("old-refresh", "https://mcp.example.test"), null);
 });
 
-test("expired or wrong-resource access tokens are rejected and deleted", async (t) => {
+test("expired access tokens are rejected and deleted; resource binding is not enforced", async (t) => {
   const { store, dir } = await makeStore();
   t.after(async () => {
     await store.persist();
@@ -142,12 +146,13 @@ test("expired or wrong-resource access tokens are rejected and deleted", async (
   const oauth = new OAuthService(makeConfig(), store);
 
   store.setAccessToken("expired", { resource: "https://mcp.example.test", expiresAt: Date.now() - 1 });
-  store.setAccessToken("wrong-resource", { resource: "https://other.example", expiresAt: Date.now() + 60_000 });
+  store.setAccessToken("foreign-resource", { resource: "https://other.example", expiresAt: Date.now() + 60_000 });
 
   assert.equal(oauth.validateAccessToken("expired"), false);
   assert.equal(store.getAccessToken("expired"), undefined);
-  assert.equal(oauth.validateAccessToken("wrong-resource"), false);
-  assert.equal(store.getAccessToken("wrong-resource"), undefined);
+  // Tokens issued for a foreign (e.g. tunnel-canonical) resource are accepted;
+  // only expiry and presence are enforced.
+  assert.equal(oauth.validateAccessToken("foreign-resource"), true);
 });
 
 test("admin password and client credentials are validated", async (t) => {

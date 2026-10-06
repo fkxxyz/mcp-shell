@@ -27,7 +27,12 @@ export class OAuthService {
     if (input.clientId !== this.config.oauth.clientId) return { ok: false, status: 400, error: "invalid_client" };
     if (!this.isAllowedRedirectUri(input.redirectUri)) return { ok: false, status: 400, error: "invalid_redirect_uri" };
     if (!input.codeChallenge || input.codeChallengeMethod !== "S256") return { ok: false, status: 400, error: "invalid_pkce" };
-    if (input.resource !== this.config.publicBaseUrl) return { ok: false, status: 400, error: "invalid_resource" };
+    // Accept any absolute http(s) resource identifier. Tunnel-fronted clients
+    // (e.g. OpenAI Secure MCP Tunnel) present the tunnel's canonical resource
+    // URL, which cannot be known to this server in advance.
+    if (!input.resource || !/^https?:\/\/[^\s]+$/i.test(input.resource)) {
+      return { ok: false, status: 400, error: "invalid_resource" };
+    }
     return { ok: true };
   }
 
@@ -83,7 +88,7 @@ export class OAuthService {
 
   validateAccessToken(token: string): boolean {
     const record = this.state.getAccessToken(token);
-    if (!record || record.expiresAt < Date.now() || record.resource !== this.config.publicBaseUrl) {
+    if (!record || record.expiresAt < Date.now()) {
       if (record) this.state.deleteAccessToken(token);
       return false;
     }
