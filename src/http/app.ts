@@ -11,6 +11,7 @@ import { ActivityTracker } from "../observability/activity-tracker.js";
 import { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import { ToolLogStore } from "../observability/tool-log-store.js";
 import { ShellStore } from "../shell-store.js";
+import { SkillCatalog } from "../skills.js";
 import {
   createActivityApiRouter,
   createRequireActivityBasicAuth,
@@ -24,13 +25,18 @@ export type AppRuntime = {
 
 const MAX_ACTIVITY_HISTORY_CALLS = 10_000;
 
-export async function createApp(config: AppConfig): Promise<AppRuntime> {
+export type AppDependencies = {
+  skills?: SkillCatalog;
+};
+
+export async function createApp(config: AppConfig, dependencies: AppDependencies = {}): Promise<AppRuntime> {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
 
   const shells = await ShellStore.open(config.paths.configDir, config.paths.shellsDbFile);
+  const skills = dependencies.skills ?? new SkillCatalog();
   const logs = new ToolLogStore(config.toolLogs.dir, config.toolLogs.maxCalls);
   const activityHistoryCalls = Math.min(config.toolLogs.maxCalls, MAX_ACTIVITY_HISTORY_CALLS);
   const activity = new ActivityTracker(activityHistoryCalls);
@@ -46,7 +52,7 @@ export async function createApp(config: AppConfig): Promise<AppRuntime> {
 
   const recorder = new ToolCallRecorder(logs, activity);
   const query = new ActivityQuery(shells, logs, activity);
-  const sessions = new McpSessionManager(shells, recorder, config.commandPath);
+  const sessions = new McpSessionManager(shells, recorder, config.commandPath, skills);
 
   if (config.activityPassword) {
     app.use("/activity", activitySecurityHeaders);

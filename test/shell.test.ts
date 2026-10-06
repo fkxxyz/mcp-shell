@@ -11,6 +11,11 @@ import type { LocalAppConfig } from "../src/config.js";
 import { createApp } from "../src/http/app.js";
 import { ShellStore } from "../src/shell-store.js";
 import { createShell } from "../src/shell.js";
+import { SkillCatalog } from "../src/skills.js";
+
+function emptySkillCatalog(dir: string): SkillCatalog {
+  return new SkillCatalog({ root: join(dir, "skills"), onDiagnostic: () => {} });
+}
 
 test("shell IDs persist and increase across store reopen", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-shell-store-test-"));
@@ -42,7 +47,7 @@ test("createShell returns concise bootstrap instructions without AGENTS.md", asy
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    const result = await createShell(store, project, { globalAgentsPath: null });
+    const result = await createShell(store, project, { globalAgentsPath: null, skillCatalog: emptySkillCatalog(dir) });
     assert.equal(
       result.instructions,
       `Shell ${result.shellId} is rooted at ${project}.\n\nKeep using shell ID ${result.shellId} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${result.shellId}.\n\nPrefer relative paths.`,
@@ -62,7 +67,7 @@ test("createShell appends root AGENTS.md to bootstrap instructions", async () =>
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    const result = await createShell(store, project, { globalAgentsPath: null });
+    const result = await createShell(store, project, { globalAgentsPath: null, skillCatalog: emptySkillCatalog(dir) });
     assert.equal(
       result.instructions,
       `Shell ${result.shellId} is rooted at ${project}.\n\nKeep using shell ID ${result.shellId} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${result.shellId}.\n\nPrefer relative paths.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nRun tests.`,
@@ -85,7 +90,7 @@ test("createShell returns global AGENTS.md before project AGENTS.md", async () =
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    const result = await createShell(store, project, { globalAgentsPath });
+    const result = await createShell(store, project, { globalAgentsPath, skillCatalog: emptySkillCatalog(dir) });
     assert.equal(
       result.instructions,
       `Shell ${result.shellId} is rooted at ${project}.\n\nKeep using shell ID ${result.shellId} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${result.shellId}.\n\nPrefer relative paths.\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n# Global rules\n\nGlobal first.\n\nProject instructions from AGENTS.md:\n\n# Repository rules\n\nProject second.`,
@@ -103,9 +108,10 @@ test("createShell rejects invalid roots before allocating a shell", async () => 
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    await assert.rejects(() => createShell(store, "relative/path", { globalAgentsPath: null }), /cwd must be an absolute path/);
-    await assert.rejects(() => createShell(store, join(dir, "missing"), { globalAgentsPath: null }), /Cannot access shell cwd/);
-    const first = await createShell(store, project, { globalAgentsPath: null });
+    const skillCatalog = emptySkillCatalog(dir);
+    await assert.rejects(() => createShell(store, "relative/path", { globalAgentsPath: null, skillCatalog }), /cwd must be an absolute path/);
+    await assert.rejects(() => createShell(store, join(dir, "missing"), { globalAgentsPath: null, skillCatalog }), /Cannot access shell cwd/);
+    const first = await createShell(store, project, { globalAgentsPath: null, skillCatalog });
     assert.equal(first.shellId, 1);
   } finally {
     store.close();
@@ -121,10 +127,38 @@ test("createShell rejects a non-file AGENTS.md before allocation", async () => {
   const store = await ShellStore.open(dir, join(dir, "shells.db"));
 
   try {
-    await assert.rejects(() => createShell(store, project, { globalAgentsPath: null }), /AGENTS\.md is not a file/);
+    const skillCatalog = emptySkillCatalog(dir);
+    await assert.rejects(() => createShell(store, project, { globalAgentsPath: null, skillCatalog }), /AGENTS\.md is not a file/);
     await rm(join(project, "AGENTS.md"), { recursive: true });
-    const first = await createShell(store, project, { globalAgentsPath: null });
+    const first = await createShell(store, project, { globalAgentsPath: null, skillCatalog });
     assert.equal(first.shellId, 1);
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("createShell lists skill summaries without loading skill instructions into bootstrap", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-skills-bootstrap-test-"));
+  const project = join(dir, "project");
+  const skillsRoot = join(dir, "skills");
+  const skillDir = join(skillsRoot, "nested", "writer");
+  await mkdir(project);
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, "SKILL.md"),
+    "---\nname: writer\ndescription: |\n  Write polished text\n  from rough notes.\n---\nSECRET_SKILL_BODY\n",
+    "utf8",
+  );
+  const store = await ShellStore.open(dir, join(dir, "shells.db"));
+  const skillCatalog = new SkillCatalog({ root: skillsRoot, onDiagnostic: () => {} });
+
+  try {
+    const result = await createShell(store, project, { globalAgentsPath: null, skillCatalog });
+    assert.deepEqual(result.skills, [{ name: "writer", description: "Write polished text\nfrom rough notes.\n" }]);
+    assert.match(result.instructions, /Available skills:\n- writer: Write polished text from rough notes\./);
+    assert.match(result.instructions, /Use the skill tool with an exact skill name/);
+    assert.doesNotMatch(result.instructions, /SECRET_SKILL_BODY/);
   } finally {
     store.close();
     await rm(dir, { recursive: true, force: true });
@@ -159,7 +193,7 @@ test("MCP create_shell feeds shell_id into relative file operations", async () =
     },
   };
 
-  const runtime = await createApp(config);
+  const runtime = await createApp(config, { skills: emptySkillCatalog(dir) });
   const server = await new Promise<Server>((resolve) => {
     const listening = runtime.app.listen(0, "127.0.0.1", () => resolve(listening));
   });

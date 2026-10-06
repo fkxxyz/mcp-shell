@@ -3,14 +3,17 @@ import { access, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ShellStore } from "./shell-store.js";
+import type { SkillCatalog, SkillSummary } from "./skills.js";
 
 export type CreateShellResult = {
   shellId: number;
   instructions: string;
+  skills: SkillSummary[];
 };
 
 type CreateShellOptions = {
   globalAgentsPath?: string | null;
+  skillCatalog: SkillCatalog;
 };
 
 async function readAgentsFile(path: string): Promise<string | null> {
@@ -27,7 +30,7 @@ async function readAgentsFile(path: string): Promise<string | null> {
 export async function createShell(
   store: ShellStore,
   cwdInput: string,
-  options: CreateShellOptions = {},
+  options: CreateShellOptions,
 ): Promise<CreateShellResult> {
   if (!isAbsolute(cwdInput)) throw new Error("cwd must be an absolute path");
 
@@ -51,9 +54,13 @@ export async function createShell(
   const projectAgentsMd = globalAgentsPath !== null && resolve(globalAgentsPath) === projectAgentsPath
     ? null
     : await readAgentsFile(projectAgentsPath);
+  const skills = await options.skillCatalog.discover();
 
   const shell = store.create(cwd);
   const base = `Shell ${shell.id} is rooted at ${cwd}.\n\nKeep using shell ID ${shell.id} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${shell.id}.\n\nPrefer relative paths.`;
+  const skillIndex = skills.length === 0
+    ? ""
+    : `\n\nAvailable skills:\n${skills.map((skill) => `- ${skill.name}: ${skill.description.replace(/\s+/g, " ").trim()}`).join("\n")}\n\nUse the skill tool with an exact skill name to load its instructions when relevant.`;
   const global = globalAgentsMd === null
     ? ""
     : `\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n${globalAgentsMd.trimEnd()}`;
@@ -63,6 +70,7 @@ export async function createShell(
 
   return {
     shellId: shell.id,
-    instructions: base + global + project,
+    instructions: base + skillIndex + global + project,
+    skills,
   };
 }

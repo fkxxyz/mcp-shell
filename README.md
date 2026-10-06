@@ -10,6 +10,7 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Shell execution: `bash`
 - Structured patching: `apply_patch`
 - Image inspection: `read_image`
+- Global skill discovery and lazy loading: `create_shell` + `skill`
 - LSP support:
   - go to definition
   - find references
@@ -140,9 +141,15 @@ The remote authorization model is intentionally simple: one configured OAuth cli
 
 ### Create a Shell
 
-Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. If `~/.agents/AGENTS.md` exists, those global instructions are included first. If the directory contains a root `AGENTS.md`, those project instructions follow so the more specific project guidance has precedence.
+Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. Available skills discovered under `~/.agents/skills` are listed by `name` and `description` only. If `~/.agents/AGENTS.md` exists, those global instructions are included before a root project `AGENTS.md`, so the more specific project guidance has precedence.
 
 Pass that `shell_id` on subsequent operations and prefer paths relative to the Shell root. Creating another Shell for the same directory is valid and produces a distinct execution context.
+
+### Load a Skill
+
+Skills are `SKILL.md` files anywhere under `~/.agents/skills`. Discovery is recursive, follows symbolic links, and requires non-empty YAML frontmatter `name` and `description` fields. Invalid skills are skipped without preventing Shell creation.
+
+Call `skill` with an exact skill name from the `create_shell` list. The tool rescans the current skill tree, then returns the complete `SKILL.md` plus the resolved skill directory for relative resources. Skill names are case-sensitive. When multiple valid skills use the same name, deterministic depth-first discovery applies and the last discovered skill wins.
 
 ## Local state
 
@@ -198,6 +205,7 @@ src/auth/          OAuth and token handling
 src/http/          HTTP application
 src/mcp/           MCP server and session handling
 src/shell*.ts      durable Shell state and bootstrap
+src/skills.ts      global skill discovery and loading
 src/tools/         MCP tool implementations
 src/observability/ tool-call logging and live activity
 web/               static activity dashboard

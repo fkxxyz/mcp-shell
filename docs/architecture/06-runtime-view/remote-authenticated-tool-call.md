@@ -51,11 +51,21 @@ A request with an unknown session ID, or a sessionless non-initialize POST, is r
 
 1. The agent calls `create_shell` with an absolute directory.
 2. mcp-shell validates that the directory exists and is accessible.
-3. If `<cwd>/AGENTS.md` exists, mcp-shell requires it to be a readable regular file and reads it. A missing file is normal.
-4. `ShellStore` inserts the Shell into `~/.mcp-shell/shells.db`; SQLite assigns a committed monotonic `shell_id`.
-5. `create_shell` returns the ID and concise bootstrap instructions naming the Shell root and preferring relative paths. If `AGENTS.md` was present, its contents are appended as project instructions.
+3. Global and project `AGENTS.md` guidance is read when present.
+4. The application-owned `SkillCatalog` recursively scans `~/.agents/skills`, follows symlinks, skips invalid skills, and resolves duplicate valid names by deterministic last discovery. Duplicate replacement is diagnosed without changing the last-wins result.
+5. `ShellStore` inserts the Shell into `~/.mcp-shell/shells.db`; SQLite assigns a committed monotonic `shell_id`.
+6. `create_shell` returns the ID, a structured `skills` summary list, and concise bootstrap instructions. The bootstrap lists only skill names and descriptions; full skill instructions are not injected. Global `AGENTS.md` guidance still precedes project guidance.
 
 The Shell is not owned by the MCP transport. The same root can have multiple independent Shell IDs, and Shell rows survive MCP disconnects and process restarts. There is no list or close operation.
+
+## Skill Loading
+
+1. The agent calls `skill` with an exact name previously advertised by `create_shell`.
+2. `SkillCatalog` rescans the current filesystem rather than consulting Shell state or a cache.
+3. The current winning valid skill with that case-sensitive name is selected; an absent name fails with `Skill not found`.
+4. The tool returns the complete current `SKILL.md`, its name and description, and the real path of the logical directory containing the discovered file so relative skill resources have an explicit base.
+
+The skill tree is global and mutable. Therefore a skill advertised during Shell creation may change or disappear before a later `skill` call; loading intentionally observes the newer filesystem state.
 
 ## Tool Invocation
 

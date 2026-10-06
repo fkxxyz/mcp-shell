@@ -49,6 +49,10 @@ MCP `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` des
 
 Pinned wrappers are resource/ergonomic guardrails. Because user overrides intentionally take precedence and authorized callers can invoke shell commands directly, command wrappers must not be treated as a security sandbox.
 
+## Skill Instruction Trust
+
+`~/.agents/skills` is an instruction source, not a filesystem confinement boundary. Skill discovery deliberately follows symlinks, including targets outside that directory, so any reachable valid `SKILL.md` is trusted as agent guidance. Operators must control the skill tree and its symlink targets accordingly. Cycle detection and physical-file deduplication protect traversal correctness, not instruction trust.
+
 ## Secrets and Logs
 
 OAuth client secret, administrator password, access tokens, refresh tokens, activity password, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.

@@ -50,6 +50,12 @@ MCP sessions are transport state. Shells are durable execution-state handles for
 
 Shells are intentionally not enumerable or closable through MCP. An agent creates a Shell for its own session and retains the returned ID. The abstraction can grow with future Shell-scoped tool state without coupling that state to MCP transport lifetime.
 
+## Lazy Global Skill Discovery
+
+Skills are host-global agent guidance under `~/.agents/skills`, not Shell state. `create_shell` exposes only the current valid skill names and descriptions; the `skill` tool loads one named `SKILL.md` only when needed. Discovery is performed from the filesystem on each operation rather than cached, so edits and symlink changes take effect without reload or watcher lifecycle.
+
+`SkillCatalog` owns recursive traversal, symlink following, metadata validation, deterministic duplicate resolution, and loading. `createApp` owns one catalog instance for the application runtime and injects it through MCP session/server construction to both `create_shell` and `skill`; tests may inject an isolated catalog. Tool adapters and Shell bootstrap consume that one authority rather than creating or duplicating discovery rules.
+
 ## Local Persistence for Local Authority
 
 OAuth token state, durable Shell state, and tool logs live under `~/.mcp-shell/`. OAuth state remains JSON; Shell state uses SQLite because Shell count grows monotonically and access is by `shell_id`, avoiding whole-history loads or rewrites. The system still assumes one host and does not introduce a distributed coordinator.
