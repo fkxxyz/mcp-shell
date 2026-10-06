@@ -93,6 +93,14 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.workspaceCard[data-running="true"] {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent),
+    var(--shadow);
 }
 
 .workspaceHeader {
@@ -118,6 +126,7 @@
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 140ms ease;
 }
 
 .workspaceName:hover {
@@ -156,13 +165,17 @@
 }
 
 .callRow {
+  --call-update-color: var(--accent);
+  position: relative;
   display: grid;
   grid-template-columns: 9px minmax(0, 1fr) auto auto;
   gap: var(--space-2);
   align-items: center;
   min-height: 34px;
+  overflow: hidden;
   padding: 6px var(--space-4);
   border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  transition: background 140ms ease;
 }
 
 .callRow:first-child {
@@ -173,19 +186,41 @@
   background: var(--surface-subtle);
 }
 
-.callState {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--success);
+.callRow[data-status="running"],
+.shellCallRow[data-status="running"] {
+  --call-update-color: var(--warning);
 }
 
-.callState[data-status="running"] {
-  background: var(--warning);
+.callRow[data-status="success"],
+.shellCallRow[data-status="success"] {
+  --call-update-color: var(--success);
 }
 
-.callState[data-status="error"] {
-  background: var(--danger);
+.callRow[data-status="error"],
+.shellCallRow[data-status="error"] {
+  --call-update-color: var(--danger);
+}
+
+.callUpdateFlash {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 58%;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--call-update-color) 15%, transparent) 48%,
+    transparent 100%
+  );
+  transform: translateX(-120%);
+  animation: call-update-flash 900ms ease-out forwards;
+}
+
+.callRow > :not(.callUpdateFlash),
+.shellCallRow > :not(.callUpdateFlash) {
+  position: relative;
+  z-index: 1;
 }
 
 .callInvocation {
@@ -197,6 +232,7 @@
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 140ms ease;
 }
 
 a.callInvocation:hover {
@@ -209,6 +245,7 @@ a.callInvocation:hover {
   font-size: 0.68rem;
   text-decoration: none;
   white-space: nowrap;
+  transition: color 140ms ease;
 }
 
 a.callShell:hover {
@@ -219,6 +256,57 @@ a.callShell:hover {
   color: var(--text-muted);
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.shellCallRow {
+  --call-update-color: var(--accent);
+  position: relative;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  min-height: 48px;
+  overflow: hidden;
+  padding: 8px var(--space-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 140ms ease;
+}
+
+a.shellCallRow:hover {
+  background: var(--surface-subtle);
+}
+
+.shellCallRow:last-child {
+  border-bottom: 0;
+}
+
+.shellCallBody {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.shellCallInvocation {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shellCallBody small,
+.shellCallDuration {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.shellCallDuration {
+  min-width: 3.5em;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -274,6 +362,22 @@ a.callShell:hover {
   overflow-wrap: anywhere;
 }
 
+@keyframes call-update-flash {
+  0% {
+    opacity: 0;
+    transform: translateX(-120%);
+  }
+
+  14% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(210%);
+  }
+}
+
 @media (max-width: 900px) {
   .pageHeader {
     align-items: flex-start;
@@ -304,6 +408,21 @@ a.callShell:hover {
   }
 
   .callShell {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspaceCard,
+  .workspaceName,
+  .callRow,
+  .callInvocation,
+  .callShell,
+  .shellCallRow {
+    transition: none;
+  }
+
+  .callUpdateFlash {
     display: none;
   }
 }

@@ -1,16 +1,18 @@
 import { Link } from "@tanstack/react-router";
-import type { ToolCallSummaryDto } from "../../../../../src/contracts/activity";
 import { formatRelativeTime } from "../../../lib/format";
+import type { ActivityCallView } from "../activity-model";
 import styles from "../activity.module.css";
 import { formatToolCall } from "../format-tool-call";
+import { ToolCallStatus } from "./ToolCallStatus";
 
 export function ActivityCallRow({
-  call,
+  item,
   now,
 }: {
-  call: ToolCallSummaryDto;
+  item: ActivityCallView;
   now: number;
 }) {
+  const { call, updateRevision } = item;
   const invocation = formatToolCall(call);
   const tool = call.status !== "running" && call.payload_available
     ? (
@@ -26,13 +28,11 @@ export function ActivityCallRow({
     : <span className={styles.callInvocation} title={invocation}>{invocation}</span>;
 
   return (
-    <div className={styles.callRow}>
-      <span
-        className={styles.callState}
-        data-status={call.status}
-        role="img"
-        aria-label={statusLabel(call.status)}
-      />
+    <div className={styles.callRow} data-status={call.status}>
+      {updateRevision > 0 && (
+        <span className={styles.callUpdateFlash} key={updateRevision} aria-hidden="true" />
+      )}
+      <ToolCallStatus status={call.status} />
       {tool}
       {call.shell_id == null
         ? <span className={styles.callShell}>pending</span>
@@ -53,10 +53,4 @@ export function ActivityCallRow({
       </time>
     </div>
   );
-}
-
-function statusLabel(status: ToolCallSummaryDto["status"]): string {
-  if (status === "running") return "Running";
-  if (status === "error") return "Error";
-  return "Succeeded";
 }

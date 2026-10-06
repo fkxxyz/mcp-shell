@@ -7,6 +7,7 @@ import type {
 const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_CALLS = 10;
 export const ACTIVITY_CARD_ROWS = 5;
+const EMPTY_SHELL_CALLS: ActivityCallView[] = [];
 
 type ActivityShellState = {
   shellId: number;
@@ -18,8 +19,13 @@ type ActivityWorkspaceState = {
   cwd: string;
   lastEventAt: number;
   runningCount: number;
-  recentCalls: ToolCallSummaryDto[];
+  recentCalls: ActivityCallView[];
   recentShells: ActivityShellState[];
+};
+
+export type ActivityCallView = {
+  call: ToolCallSummaryDto;
+  updateRevision: number;
 };
 
 export type ActivityWorkspaceView = {
@@ -27,7 +33,7 @@ export type ActivityWorkspaceView = {
   lastEventAt: number;
   runningCount: number;
   activeShellCount: number;
-  visibleCalls: ToolCallSummaryDto[];
+  visibleCalls: ActivityCallView[];
 };
 
 export type ActivityView = {
@@ -59,6 +65,7 @@ export class ActivityStore {
   private clockOffset = 0;
   private readonly listeners = new Set<() => void>();
   private current: ActivityView = EMPTY_VIEW;
+  private shellCalls = new Map<number, ActivityCallView[]>();
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -66,6 +73,10 @@ export class ActivityStore {
   };
 
   readonly getSnapshot = (): ActivityView => this.current;
+
+  getShellCalls(shellId: number): ActivityCallView[] {
+    return this.shellCalls.get(shellId) ?? EMPTY_SHELL_CALLS;
+  }
 
   replaceSnapshot(snapshot: ActivitySnapshotDto): void {
     const serverTime = Date.parse(snapshot.server_time);
@@ -83,6 +94,7 @@ export class ActivityStore {
       else this.earlierOrder.push(workspace.cwd);
     }
 
+    this.refreshShellCalls();
     this.emit();
   }
 
@@ -104,8 +116,9 @@ export class ActivityStore {
 
     const now = this.now();
     const wasActive = existed && this.isActive(workspace, now);
-    const existingIndex = workspace.recentCalls.findIndex((item) => item.id === call.id);
-    const previous = existingIndex >= 0 ? workspace.recentCalls[existingIndex] : undefined;
+    const existingIndex = workspace.recentCalls.findIndex((item) => item.call.id === call.id);
+    const previousState = existingIndex >= 0 ? workspace.recentCalls[existingIndex] : undefined;
+    const previous = previousState?.call;
 
     if (call.status === "running") {
       if (!previous || previous.status !== "running") workspace.runningCount += 1;
@@ -117,9 +130,13 @@ export class ActivityStore {
 
     updateShellActivity(workspace, call, previous);
 
+    const nextCall: ActivityCallView = {
+      call,
+      updateRevision: (previousState?.updateRevision ?? 0) + 1,
+    };
     const merged = existingIndex >= 0
-      ? workspace.recentCalls.map((item, index) => index === existingIndex ? call : item)
-      : [call, ...workspace.recentCalls];
+      ? workspace.recentCalls.map((item, index) => index === existingIndex ? nextCall : item)
+      : [nextCall, ...workspace.recentCalls];
     workspace.recentCalls = retainRecentCalls(merged, MAX_RECENT_CALLS);
 
     const eventAt = callEventAt(call);
@@ -134,6 +151,7 @@ export class ActivityStore {
       (nowActive ? this.activeOrder : this.earlierOrder).unshift(workspace.cwd);
     }
 
+    this.refreshShellCalls();
     this.emit();
   }
 
@@ -204,6 +222,10 @@ export class ActivityStore {
 
     for (const listener of this.listeners) listener();
   }
+
+  private refreshShellCalls(): void {
+    this.shellCalls = projectShellCalls(this.workspaces.values());
+  }
 }
 
 function fromDto(item: ActivityWorkspaceDto, now: number): ActivityWorkspaceState {
@@ -211,7 +233,10 @@ function fromDto(item: ActivityWorkspaceDto, now: number): ActivityWorkspaceStat
     cwd: item.cwd,
     lastEventAt: Date.parse(item.last_event_at),
     runningCount: Number(item.running_call_count) || 0,
-    recentCalls: retainRecentCalls(item.recent_calls ?? [], MAX_RECENT_CALLS),
+    recentCalls: retainRecentCalls(
+      (item.recent_calls ?? []).map((call) => ({ call, updateRevision: 0 })),
+      MAX_RECENT_CALLS,
+    ),
     recentShells: (item.recent_shells ?? [])
       .map((shell) => ({
         shellId: shell.shell_id,
@@ -265,23 +290,73 @@ function isShellActive(shell: ActivityShellState, now: number): boolean {
   return shell.runningCount > 0 || now - shell.lastEventAt < ACTIVE_WINDOW_MS;
 }
 
-function retainRecentCalls(calls: ToolCallSummaryDto[], limit: number): ToolCallSummaryDto[] {
-  const byId = new Map<string, ToolCallSummaryDto>();
-  for (const call of calls) byId.set(call.id, call);
+function retainRecentCalls(calls: ActivityCallView[], limit: number): ActivityCallView[] {
+  const byId = new Map<string, ActivityCallView>();
+  for (const call of calls) byId.set(call.call.id, call);
 
-  const running: ToolCallSummaryDto[] = [];
-  const completed: ToolCallSummaryDto[] = [];
+  const running: ActivityCallView[] = [];
+  const completed: ActivityCallView[] = [];
   for (const call of byId.values()) {
-    (call.status === "running" ? running : completed).push(call);
+    (call.call.status === "running" ? running : completed).push(call);
   }
 
-  running.sort((a, b) => compareTime(b.started_at, a.started_at) || b.id.localeCompare(a.id));
+  running.sort((a, b) => compareTime(b.call.started_at, a.call.started_at)
+    || b.call.id.localeCompare(a.call.id));
   completed.sort((a, b) => compareTime(
-    b.finished_at ?? b.started_at,
-    a.finished_at ?? a.started_at,
-  ) || b.id.localeCompare(a.id));
+    b.call.finished_at ?? b.call.started_at,
+    a.call.finished_at ?? a.call.started_at,
+  ) || b.call.id.localeCompare(a.call.id));
 
   return [...running, ...completed].slice(0, limit);
+}
+
+function projectShellCalls(workspaces: Iterable<ActivityWorkspaceState>): Map<number, ActivityCallView[]> {
+  const byShell = new Map<number, ActivityCallView[]>();
+  for (const workspace of workspaces) {
+    for (const item of workspace.recentCalls) {
+      const shellId = item.call.shell_id;
+      if (shellId == null) continue;
+      const calls = byShell.get(shellId) ?? [];
+      calls.push(item);
+      byShell.set(shellId, calls);
+    }
+  }
+  for (const [shellId, calls] of byShell) {
+    byShell.set(shellId, sortCallViews(calls));
+  }
+  return byShell;
+}
+
+export function mergeShellCallViews(
+  history: ToolCallSummaryDto[],
+  live: ActivityCallView[],
+): ActivityCallView[] {
+  const byId = new Map<string, ActivityCallView>();
+  for (const call of history) byId.set(call.id, { call, updateRevision: 0 });
+  for (const item of live) {
+    const historical = byId.get(item.call.id);
+    if (item.call.status === "running" || !historical) {
+      byId.set(item.call.id, item);
+    } else if (item.updateRevision > 0) {
+      byId.set(item.call.id, {
+        call: historical.call,
+        updateRevision: item.updateRevision,
+      });
+    }
+  }
+  return sortCallViews([...byId.values()]);
+}
+
+function sortCallViews(calls: ActivityCallView[]): ActivityCallView[] {
+  return [...calls].sort((a, b) => {
+    const aRunning = a.call.status === "running";
+    const bRunning = b.call.status === "running";
+    if (aRunning !== bRunning) return aRunning ? -1 : 1;
+
+    const aTime = aRunning ? a.call.started_at : (a.call.finished_at ?? a.call.started_at);
+    const bTime = bRunning ? b.call.started_at : (b.call.finished_at ?? b.call.started_at);
+    return compareTime(bTime, aTime) || b.call.id.localeCompare(a.call.id);
+  });
 }
 
 function callEventAt(call: ToolCallSummaryDto): number {

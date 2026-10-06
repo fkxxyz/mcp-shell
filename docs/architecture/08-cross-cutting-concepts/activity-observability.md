@@ -193,7 +193,9 @@ A Shell is active under the same ten-minute lifecycle rule, or while it owns a r
 
 The Activity overview is a dense workspace wall rather than a Shell-grouped feed. Each workspace card shows at most five current-and-recent calls. Running calls are protected first, ordered by start time; the remaining slots use most recently completed calls. Shell identity is row metadata rather than a grouping level, preserving one readable activity trajectory per workspace. EARLIER workspaces use the same card representation behind a collapsed section by default.
 
-The ten-minute threshold, ACTIVE/EARLIER state, stable ordering, and visual rank are not persisted backend state.
+The browser also attaches an ephemeral update revision to each call in the live projection. Calls received in an SSE snapshot establish a quiet baseline at revision zero; each subsequent `tool_call.started` or `tool_call.finished` event increments the affected call revision. The revision exists only to identify a live lifecycle update for presentation and is neither persisted nor derived from wall-clock freshness.
+
+The ten-minute threshold, ACTIVE/EARLIER state, stable ordering, update revision, and visual rank are not persisted backend state.
 
 ## Browser Implementation Boundary
 
@@ -217,9 +219,11 @@ The Web Console is a React + TypeScript SPA built by Vite. Activity remains feat
 
 TanStack Query owns bounded historical reads. A completed SSE event invalidates the affected Shell-history query and workspace-Shell query; the browser then rereads authoritative history instead of reproducing backend insertion/pagination rules inside the cache.
 
+Shell detail composes two projections without changing either authority: paginated `/api/shells/:shell_id/calls` supplies completed history, while the bounded Activity model supplies current live calls for that Shell. The browser merges them by call ID: running/live-only calls come from the Activity projection; once completed history contains the same call, its data fields become authoritative while the live update revision may remain as a transient presentation signal. Running calls remain outside the paginated completed-history contract, so transient lifecycle state cannot change cursor semantics. History loading or failure does not hide already-known live calls. The live Shell overlay is intentionally bounded by the same recent-call Activity projection available in the SSE snapshot; it does not claim to enumerate every concurrently running call under arbitrarily high workspace fan-out.
+
 Shell and tool-call detail use addressable routes so refresh, browser back/forward, and copied links preserve user context. State with the same user expectation should prefer route/search state over hidden component state.
 
-The browser owns invocation presentation. A feature-local pure formatter orders preview arguments by a single global importance policy, keeps unknown arguments visible after known arguments, renders calls as `tool_name(arg=value, ...)`, and collapses structured values before CSS applies final single-line ellipsis. The backend does not know argument importance or construct presentation labels. Activity cards and Shell history share this formatter so the same summary has the same human-readable invocation in both surfaces.
+The browser owns invocation presentation. A feature-local pure formatter orders preview arguments by a single global importance policy, keeps unknown arguments visible after known arguments, renders calls as `tool_name(arg=value, ...)`, and collapses structured values before CSS applies final single-line ellipsis. The backend does not know argument importance or construct presentation labels. Activity cards and Shell history share this formatter and one status indicator: running calls use motion/shape to distinguish in-progress work, successful calls use a success marker, and failed calls use a distinct error marker. Live update emphasis is driven by the ephemeral update revision rather than DOM mount timing or timestamp heuristics. Reduced-motion preferences suppress nonessential animation while preserving status shape and color.
 
 Tool inputs, outputs, errors, previews, and repository-controlled text are rendered through React text nodes. Untrusted tool content must not be interpreted as executable markup.
 

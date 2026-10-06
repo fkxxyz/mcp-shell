@@ -1,0 +1,46 @@
+.status {
+  position: relative;
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  flex: none;
+}
+
+.status::before {
+  position: absolute;
+  inset: 1px;
+  content: "";
+}
+
+.status[data-status="success"]::before {
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.status[data-status="error"]::before {
+  border-radius: 1px;
+  background: var(--danger);
+  transform: rotate(45deg);
+}
+
+.status[data-status="running"]::before {
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--warning) 26%, transparent);
+  border-top-color: var(--warning);
+  border-radius: 50%;
+  animation: tool-call-spin 700ms linear infinite;
+}
+
+@keyframes tool-call-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status[data-status="running"]::before {
+    border-color: var(--warning);
+    border-right-color: transparent;
+    animation: none;
+  }
+}

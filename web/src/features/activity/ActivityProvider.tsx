@@ -2,13 +2,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
 } from "react";
-import { ActivityStore, type ActivityView } from "./activity-model";
+import { ActivityStore, type ActivityCallView, type ActivityView } from "./activity-model";
 import { activityQueryKeys, openActivityStream } from "./api";
 
 export type ActivityConnection = "connecting" | "live" | "reconnecting";
@@ -68,6 +69,12 @@ export function useActivityView(): ActivityView {
 
 export function useActivityConnection(): ActivityConnection {
   return useActivityContext().connection;
+}
+
+export function useShellActivityCalls(shellId: number): ActivityCallView[] {
+  const { store } = useActivityContext();
+  const getSnapshot = useCallback(() => store.getShellCalls(shellId), [shellId, store]);
+  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
 }
 
 function useActivityContext(): ActivityContextValue {

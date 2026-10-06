@@ -12,7 +12,7 @@ export function WorkspaceActivityCard({
   now: number;
 }) {
   return (
-    <article className={styles.workspaceCard}>
+    <article className={styles.workspaceCard} data-running={workspace.runningCount > 0 || undefined}>
       <header className={styles.workspaceHeader}>
         <div className={styles.workspaceIdentity}>
           <Link
@@ -35,8 +35,8 @@ export function WorkspaceActivityCard({
       </header>
 
       <div className={styles.callList}>
-        {workspace.visibleCalls.map((call) => (
-          <ActivityCallRow call={call} now={now} key={call.id} />
+        {workspace.visibleCalls.map((item) => (
+          <ActivityCallRow item={item} now={now} key={item.call.id} />
         ))}
         {workspace.visibleCalls.length === 0 && (
           <p className={styles.noCalls}>No recent calls.</p>
