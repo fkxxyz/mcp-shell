@@ -127,6 +127,8 @@ ActivityTracker owns only bounded in-process state:
 - per-workspace latest lifecycle-event time; and
 - connected live-feed subscribers.
 
+Activity snapshots derive per-Shell recent activity facts from the same bounded completed-call history plus current running calls. This supporting projection carries `shell_id`, latest lifecycle time, and running-call count so the browser can calculate active-Shell counts without querying the durable Shell inventory or introducing a second mutable activity authority.
+
 Completed-call retirement is one lifecycle across the projection: when a call leaves the bounded global history it also leaves any workspace recent-call projection, and a workspace with neither running nor retained recent calls is removed. This prevents UI-visible calls or workspaces from outliving the queryable activity window.
 
 It does not read gzip payloads, enumerate Shells, persist workspace state, or decide visual ranking tiers.
@@ -162,6 +164,8 @@ The live endpoint uses Server-Sent Events because delivery is server-to-browser 
 
 Summary events contain identity, lifecycle timestamps, status, payload availability, and an optional bounded input preview. They never contain complete tool inputs or outputs.
 
+Snapshot workspace summaries also include `recent_shells`, a bounded supporting activity projection rather than complete Shell inventory. `/api/shells?cwd=...` remains authoritative for enumerating durable Shells belonging to a workspace.
+
 ## Snapshot-to-Live Consistency
 
 Opening a live feed is atomic with respect to the in-process projection:
@@ -184,6 +188,10 @@ The framework-independent Activity model owns presentation policy. It maintains 
 - EARLIER: otherwise.
 
 Repeated calls within ACTIVE update content without reordering the workspace. A workspace promoted from EARLIER enters the front of ACTIVE. A local expiry timer demotes inactive workspaces even when no new server event arrives.
+
+A Shell is active under the same ten-minute lifecycle rule, or while it owns a running call. The Activity model derives active-workspace, active-Shell, and running-call summary counts from these facts; the backend does not persist or rank those presentation states.
+
+The Activity overview is a dense workspace wall rather than a Shell-grouped feed. Each workspace card shows at most five current-and-recent calls. Running calls are protected first, ordered by start time; the remaining slots use most recently completed calls. Shell identity is row metadata rather than a grouping level, preserving one readable activity trajectory per workspace. EARLIER workspaces use the same card representation behind a collapsed section by default.
 
 The ten-minute threshold, ACTIVE/EARLIER state, stable ordering, and visual rank are not persisted backend state.
 

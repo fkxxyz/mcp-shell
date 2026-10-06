@@ -73,7 +73,7 @@ The repository command layer wraps `rg`, `find`, `fd`, and `grep` with a 200ms w
 
 ## Development
 
-Install dependencies with `npm install`. For development, run the server watcher and Vite together with:
+Install development dependencies with `npm install --include=dev`; this keeps the repository bootstrap independent of an inherited `NODE_ENV=production`. For development, run the server watcher and Vite together with:
 
 ```sh
 npm run dev

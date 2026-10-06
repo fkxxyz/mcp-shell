@@ -45,7 +45,7 @@ In `local` mode, the server binds only to `127.0.0.1`; treat any tunnel forwardi
 ## Install
 
 ```bash
-npm install
+npm install --include=dev
 ```
 
 ## Configure

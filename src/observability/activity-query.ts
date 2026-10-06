@@ -39,6 +39,11 @@ export class ActivityQuery {
         last_event_at: new Date(workspace.lastEventAt).toISOString(),
         running_call_count: workspace.runningCallCount,
         recent_calls: workspace.recentCalls.map(toApiSummary),
+        recent_shells: workspace.recentShells.map((shell) => ({
+          shell_id: shell.shellId,
+          last_event_at: new Date(shell.lastEventAt).toISOString(),
+          running_call_count: shell.runningCallCount,
+        })),
       })),
     };
   }

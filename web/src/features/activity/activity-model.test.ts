@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ActivityStore } from "./activity-model";
+import type { ToolCallSummaryDto } from "../../../../src/contracts/activity";
+import { ACTIVITY_CARD_ROWS, ActivityStore } from "./activity-model";
 
 describe("ActivityStore", () => {
   afterEach(() => {
@@ -36,7 +37,7 @@ describe("ActivityStore", () => {
     expect(store.getSnapshot().earlier.map((item) => item.cwd)).toEqual(["/c", "/b", "/a"]);
   });
 
-  it("keeps running workspaces active regardless of last-event age", () => {
+  it("keeps running workspaces and shells active regardless of last-event age", () => {
     vi.useFakeTimers();
     const base = new Date("2026-10-06T08:00:00.000Z").getTime();
     vi.setSystemTime(base);
@@ -59,12 +60,96 @@ describe("ActivityStore", () => {
           status: "running",
           payload_available: false,
         }],
+        recent_shells: [{
+          shell_id: 1,
+          last_event_at: new Date(base - 60 * 60_000).toISOString(),
+          running_call_count: 1,
+        }],
       }],
     });
 
     vi.setSystemTime(base + 24 * 60 * 60_000);
     expect(store.tick()).toBe(false);
     expect(store.getSnapshot().active.map((item) => item.cwd)).toEqual(["/running"]);
+    expect(store.getSnapshot().summary.activeShellCount).toBe(1);
+  });
+
+  it("derives active workspace, shell, and running-call counts from one activity model", () => {
+    vi.useFakeTimers();
+    const base = new Date("2026-10-06T08:00:00.000Z").getTime();
+    vi.setSystemTime(base);
+    const store = new ActivityStore();
+
+    store.replaceSnapshot({
+      server_time: new Date(base).toISOString(),
+      workspaces: [
+        {
+          ...workspace("/a", base - 1_000),
+          running_call_count: 2,
+          recent_shells: [
+            shell(1, base - 2_000),
+            shell(2, base - 60 * 60_000, 1),
+          ],
+        },
+        {
+          ...workspace("/b", base - 2_000),
+          recent_shells: [shell(3, base - 3_000)],
+        },
+        {
+          ...workspace("/earlier", base - 60 * 60_000),
+          recent_shells: [shell(4, base - 60 * 60_000)],
+        },
+      ],
+    });
+
+    expect(store.getSnapshot().summary).toEqual({
+      activeWorkspaceCount: 2,
+      activeShellCount: 3,
+      runningCallCount: 2,
+    });
+  });
+
+  it("shows at most five current-and-recent calls with running calls protected from recency eviction", () => {
+    vi.useFakeTimers();
+    const base = new Date("2026-10-06T08:00:00.000Z").getTime();
+    vi.setSystemTime(base);
+    const store = new ActivityStore();
+
+    const running: ToolCallSummaryDto = {
+      id: "long-running",
+      shell_id: 1,
+      cwd: "/work",
+      tool: "bash",
+      input_preview: { command: "sleep 60", shell_id: 1 },
+      started_at: new Date(base - 60_000).toISOString(),
+      finished_at: null,
+      duration_ms: null,
+      status: "running",
+      payload_available: false,
+    };
+    const completed = Array.from({ length: 6 }, (_, index) => (
+      call(`done-${index}`, "/work", base - index * 1_000)
+    ));
+
+    store.replaceSnapshot({
+      server_time: new Date(base).toISOString(),
+      workspaces: [{
+        ...workspace("/work", base),
+        running_call_count: 1,
+        recent_calls: [running, ...completed],
+        recent_shells: [shell(1, base, 1)],
+      }],
+    });
+
+    const visible = store.getSnapshot().active[0]!.visibleCalls;
+    expect(visible).toHaveLength(ACTIVITY_CARD_ROWS);
+    expect(visible[0]?.id).toBe("long-running");
+    expect(visible.slice(1).map((item) => item.id)).toEqual([
+      "done-0",
+      "done-1",
+      "done-2",
+      "done-3",
+    ]);
   });
 });
 
@@ -74,10 +159,19 @@ function workspace(cwd: string, lastEventAt: number) {
     last_event_at: new Date(lastEventAt).toISOString(),
     running_call_count: 0,
     recent_calls: [],
+    recent_shells: [],
   };
 }
 
-function call(id: string, cwd: string, at: number) {
+function shell(shellId: number, lastEventAt: number, runningCallCount = 0) {
+  return {
+    shell_id: shellId,
+    last_event_at: new Date(lastEventAt).toISOString(),
+    running_call_count: runningCallCount,
+  };
+}
+
+function call(id: string, cwd: string, at: number): ToolCallSummaryDto {
   return {
     id,
     shell_id: 1,
@@ -87,7 +181,7 @@ function call(id: string, cwd: string, at: number) {
     started_at: new Date(at).toISOString(),
     finished_at: new Date(at + 1).toISOString(),
     duration_ms: 1,
-    status: "success" as const,
+    status: "success",
     payload_available: true,
   };
 }

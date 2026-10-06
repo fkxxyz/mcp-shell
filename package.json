@@ -13,7 +13,7 @@
     "start": "NODE_ENV=production node dist/server/mcp-shell.js",
     "test": "npm run test:server && npm run test:web",
     "test:server": "tsx --test test/*.test.ts",
-    "test:web": "vitest run --config web/vitest.config.ts",
+    "test:web": "NODE_ENV=test vitest run --config web/vitest.config.ts",
     "typecheck": "npm run typecheck:server && npm run typecheck:web",
     "typecheck:server": "tsc -p tsconfig.json",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",

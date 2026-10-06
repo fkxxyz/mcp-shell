@@ -82,3 +82,87 @@ test("completed-call retention also retires stale workspace projection state", (
 
   tracker.close();
 });
+
+test("snapshot keeps shell activity facts beyond the per-workspace recent-call window", () => {
+  const tracker = new ActivityTracker(100, 2);
+
+  tracker.finished({
+    id: "shell-1",
+    tool: "read",
+    shellId: 1,
+    cwd: "/workspace",
+    startedAt: 1,
+    finishedAt: 2,
+    durationMs: 1,
+    status: "success",
+    payloadAvailable: true,
+  });
+  tracker.finished({
+    id: "shell-2-a",
+    tool: "read",
+    shellId: 2,
+    cwd: "/workspace",
+    startedAt: 3,
+    finishedAt: 4,
+    durationMs: 1,
+    status: "success",
+    payloadAvailable: true,
+  });
+  tracker.finished({
+    id: "shell-2-b",
+    tool: "edit",
+    shellId: 2,
+    cwd: "/workspace",
+    startedAt: 5,
+    finishedAt: 6,
+    durationMs: 1,
+    status: "success",
+    payloadAvailable: true,
+  });
+
+  const workspace = tracker.snapshot().workspaces[0]!;
+  assert.deepEqual(workspace.recentCalls.map((call) => call.id), ["shell-2-b", "shell-2-a"]);
+  assert.deepEqual(workspace.recentShells.map((shell) => shell.shellId), [2, 1]);
+
+  tracker.close();
+});
+
+test("snapshot protects running calls from newer completed calls in the recent window", () => {
+  const tracker = new ActivityTracker(100, 2);
+
+  tracker.started({
+    id: "running",
+    tool: "bash",
+    shellId: 1,
+    cwd: "/workspace",
+    startedAt: 1,
+  });
+  tracker.finished({
+    id: "done-1",
+    tool: "read",
+    shellId: 1,
+    cwd: "/workspace",
+    startedAt: 10,
+    finishedAt: 11,
+    durationMs: 1,
+    status: "success",
+    payloadAvailable: true,
+  });
+  tracker.finished({
+    id: "done-2",
+    tool: "edit",
+    shellId: 1,
+    cwd: "/workspace",
+    startedAt: 20,
+    finishedAt: 21,
+    durationMs: 1,
+    status: "success",
+    payloadAvailable: true,
+  });
+
+  const workspace = tracker.snapshot().workspaces[0]!;
+  assert.deepEqual(workspace.recentCalls.map((call) => call.id), ["running", "done-2"]);
+  assert.equal(workspace.recentShells[0]?.runningCallCount, 1);
+
+  tracker.close();
+});

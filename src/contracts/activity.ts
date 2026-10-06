@@ -13,11 +13,18 @@ export type ToolCallSummaryDto = {
   payload_available: boolean;
 };
 
+export type ActivityShellDto = {
+  shell_id: number;
+  last_event_at: string;
+  running_call_count: number;
+};
+
 export type ActivityWorkspaceDto = {
   cwd: string;
   last_event_at: string;
   running_call_count: number;
   recent_calls: ToolCallSummaryDto[];
+  recent_shells: ActivityShellDto[];
 };
 
 export type ActivitySnapshotDto = {

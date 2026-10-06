@@ -15,6 +15,13 @@ export type WorkspaceSnapshot = {
   lastEventAt: number;
   runningCallCount: number;
   recentCalls: ToolCallSummary[];
+  recentShells: WorkspaceShellActivity[];
+};
+
+export type WorkspaceShellActivity = {
+  shellId: number;
+  lastEventAt: number;
+  runningCallCount: number;
 };
 
 export type ActivitySnapshot = {
@@ -88,11 +95,13 @@ export class ActivityTracker {
   }
 
   snapshot(): ActivitySnapshot {
+    const recentShellsByWorkspace = this.recentShellActivity();
     const workspaces = [...this.workspaces.values()]
       .map((workspace) => {
         const running = [...workspace.running.values()]
-          .sort((a, b) => b.startedAt - a.startedAt || b.id.localeCompare(a.id));
-        const recentCalls = [...running, ...workspace.recent]
+          .sort(compareRunningCalls);
+        const completed = [...workspace.recent].sort(compareCompletedCalls);
+        const recentCalls = [...running, ...completed]
           .slice(0, this.maxRecentPerWorkspace)
           .map(cloneSummary);
         return {
@@ -100,6 +109,7 @@ export class ActivityTracker {
           lastEventAt: workspace.lastEventAt,
           runningCallCount: workspace.running.size,
           recentCalls,
+          recentShells: recentShellsByWorkspace.get(workspace.cwd) ?? [],
         };
       })
       .sort((a, b) => b.lastEventAt - a.lastEventAt || a.cwd.localeCompare(b.cwd));
@@ -108,6 +118,44 @@ export class ActivityTracker {
       serverTime: Date.now(),
       workspaces,
     };
+  }
+
+  private recentShellActivity(): Map<string, WorkspaceShellActivity[]> {
+    const byWorkspace = new Map<string, Map<number, WorkspaceShellActivity>>();
+
+    const apply = (call: ToolCallSummary, running: boolean) => {
+      if (!call.cwd || call.shellId == null) return;
+      let shells = byWorkspace.get(call.cwd);
+      if (!shells) {
+        shells = new Map();
+        byWorkspace.set(call.cwd, shells);
+      }
+
+      const eventAt = running ? call.startedAt : (call.finishedAt ?? call.startedAt);
+      const existing = shells.get(call.shellId);
+      if (existing) {
+        existing.lastEventAt = Math.max(existing.lastEventAt, eventAt);
+        if (running) existing.runningCallCount += 1;
+      } else {
+        shells.set(call.shellId, {
+          shellId: call.shellId,
+          lastEventAt: eventAt,
+          runningCallCount: running ? 1 : 0,
+        });
+      }
+    };
+
+    for (const call of this.completed) apply(call, false);
+    for (const call of this.running.values()) apply(call, true);
+
+    return new Map(
+      [...byWorkspace].map(([cwd, shells]) => [
+        cwd,
+        [...shells.values()].sort(
+          (a, b) => b.lastEventAt - a.lastEventAt || b.shellId - a.shellId,
+        ),
+      ]),
+    );
   }
 
   openFeed(): { snapshot: ActivitySnapshot; feed: ActivityFeed } {
@@ -183,7 +231,8 @@ export class ActivityTracker {
       workspace.lastEventAt = Math.max(workspace.lastEventAt, call.finishedAt);
       const recentIndex = workspace.recent.findIndex((item) => item.id === call.id);
       if (recentIndex >= 0) workspace.recent.splice(recentIndex, 1);
-      workspace.recent.unshift(summary);
+      workspace.recent.push(summary);
+      workspace.recent.sort(compareCompletedCalls);
       if (workspace.recent.length > this.maxRecentPerWorkspace) workspace.recent.length = this.maxRecentPerWorkspace;
     } else if (existing?.cwd) {
       this.workspaces.get(existing.cwd)?.running.delete(call.id);
@@ -282,6 +331,16 @@ function insertNewestFirst(items: ToolCallSummary[], call: ToolCallSummary): voi
     index++;
   }
   items.splice(index, 0, call);
+}
+
+function compareRunningCalls(a: ToolCallSummary, b: ToolCallSummary): number {
+  return b.startedAt - a.startedAt || b.id.localeCompare(a.id);
+}
+
+function compareCompletedCalls(a: ToolCallSummary, b: ToolCallSummary): number {
+  const aEventAt = a.finishedAt ?? a.startedAt;
+  const bEventAt = b.finishedAt ?? b.startedAt;
+  return bEventAt - aEventAt || b.id.localeCompare(a.id);
 }
 
 function cloneSummary(call: ToolCallSummary): ToolCallSummary {

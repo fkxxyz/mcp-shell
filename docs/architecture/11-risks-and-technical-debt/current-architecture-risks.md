@@ -59,6 +59,20 @@ Control: store logs under owner-controlled local paths with restrictive permissi
 - **Exit criteria:** metadata growth is bounded or intentionally archived, old payload references have explicit semantics, operators can state how metadata is created, retained, archived, and retired, and Activity summary fields that need restart continuity have a retention policy compatible with the payload data they summarize.
 - **Priority:** medium; growth is already observable, but the correct retention semantics require an explicit product/operational decision.
 
+## Active-Shell Activity Projection Is Coupled to Global Call Retention
+
+- **Root cause:** Activity snapshot `recent_shells` facts are reconstructed from the globally bounded completed-call window plus current running calls instead of having a lifecycle bounded directly by the browser's active-Shell time window.
+- **Primary cost dimension:** observability correctness and scaling.
+- **Current cost:** under unusually high call volume, a Shell whose last lifecycle event is still inside the ten-minute ACTIVE window can disappear from the supporting projection if that call is evicted from the global 10,000-call in-memory history first, causing the browser to undercount active Shells. Snapshot size also scales with distinct Shells represented in that global history rather than with a dedicated active-Shell bound. No current production evidence shows either effect is material.
+- **Evidence:** the Activity wall needs accurate distinct active-Shell counts without issuing one Shell-inventory request per workspace, so `recent_shells` is currently derived from ActivityTracker's existing bounded completed/running call state. The browser independently applies the ten-minute ACTIVE rule.
+- **Cost mechanism:** one retention policy is serving two different semantics: bounded recent-call history and active-Shell presence. When call-rate pressure retires history faster than elapsed-time pressure retires activity, the two semantics can diverge; retaining more global calls also increases the supporting snapshot scope even when only recent Shell presence is needed.
+- **Reachable better state:** if measurements show material divergence or snapshot cost, maintain one small per-Shell lifecycle projection keyed by workspace/Shell and retire entries when they are outside the active window and have no running calls, while keeping durable Shell inventory and call history as separate authorities.
+- **Governing constraint:** active-Shell summary accuracy within the advertised activity window must not depend on unrelated global call-retention pressure, and supporting snapshot state should be bounded by the activity semantics it serves.
+- **Scope discovery:** include ActivityTracker retention and startup bootstrap, SSE snapshot serialization, ActivityStore active-Shell expiry, restart semantics, global-history configuration, and any UI summary consumers before changing the projection.
+- **Repair direction:** measure peak calls per ten minutes, distinct Shells per snapshot, and serialized snapshot size first. Do not add a second lifecycle map until those measurements establish meaningful cost or correctness risk; if triggered, derive and retire Shell activity at the existing ActivityTracker control point rather than adding browser/API reconciliation.
+- **Exit criteria:** either measurements demonstrate the current 10,000-call window safely dominates the ten-minute active window at supported workloads with acceptable snapshot size, or active-Shell presence is independently bounded by lifecycle time/running state and remains correct under call-history eviction.
+- **Priority:** low; the coupling is real and avoidable, but current materiality is unmeasured and eager repair would add state and expiry complexity.
+
 ## Million-Scale Payload Retention Exceeds the Current Retention Model
 
 - **Root cause:** payload retention is still organized as one filesystem directory plus an in-memory filename set whose oldest-entry selection cost grows with retained payload count, while the supported configuration now permits million-call retention in actual operation.
@@ -118,20 +132,6 @@ Control: clients must reinitialize MCP sessions after reconnect. Do not infer MC
 - **Repair direction:** do not collapse documentation or generate prose mechanically. Incrementally replace duplicated normative wording with explicit ownership/cross-references when documents are next touched, and improve architecture navigation where it reduces search burden.
 - **Exit criteria:** representative architecture changes can identify one semantic authority before editing, derived documents have clear projection roles, and changes no longer require reconciling multiple apparently authoritative definitions of the same rule.
 - **Priority:** low; the synchronization cost is now demonstrated across multiple domains, but broad documentation restructuring would currently cost more than incremental convergence.
-
-## Development Verification Inherits Ambient `NODE_ENV`
-
-- **Root cause:** repository bootstrap and verification commands do not fully own the execution mode required for development dependencies and browser tests, so an ambient `NODE_ENV=production` changes the semantics of otherwise canonical commands.
-- **Primary cost dimension:** development feedback reliability.
-- **Current cost:** a maintainer or agent can receive false setup or test failures from a clean worktree even when the product change is correct, then spend time diagnosing environment state outside the changed code.
-- **Evidence:** during the 2026-10-06 Web Console root-entry change, `npm ci` under ambient `NODE_ENV=production` omitted dev dependencies and made server typecheck fail with missing type declarations. After explicitly including dev dependencies, `npm run verify` under the same ambient variable loaded React's production build and failed the Web test with `React.act is not a function`; running the same canonical verification with `NODE_ENV` unset passed all checks. The same failure recurred independently during the 2026-10-06 Activity input-preview work: the canonical Web test loaded React's production test-utils and failed with `React.act is not a function`, while the identical test command passed after unsetting `NODE_ENV`.
-- **Cost mechanism:** implicit process environment acts as a hidden second configuration authority for development workflows. The same repository command therefore has different dependency installation and test behavior depending on caller state, reducing reproducibility and making failures ambiguous between product defects and environment contamination.
-- **Reachable better state:** canonical development/bootstrap and verification entry points explicitly establish the dependency and runtime modes they require, while production start/build behavior remains intentionally production-oriented.
-- **Governing constraint:** repository-defined development and verification commands must produce the same dependency set and test semantics regardless of an unrelated ambient `NODE_ENV`; production runtime mode may still be explicit where required.
-- **Scope discovery:** inspect package scripts for install/bootstrap guidance, typecheck/test/verify commands, Vite/Vitest mode selection, any helper scripts that spawn npm commands, CI invocation, and developer documentation that presents canonical setup or verification commands.
-- **Repair direction:** remove ambient-mode dependence at the smallest shared command boundaries rather than adding per-test workarounds. Preserve explicit production semantics for `npm start` and production builds.
-- **Exit criteria:** from a clean worktree, canonical bootstrap plus `npm run verify` succeeds with the same test semantics when invoked both with `NODE_ENV` unset and with an inherited `NODE_ENV=production`, without relying on previously installed dev dependencies.
-- **Priority:** medium; the repair should be small, while current behavior directly degrades clean-worktree reproducibility and can repeatedly create misleading failures for humans and agents.
 
 ## Production Releases Lack an Atomic Artifact Switch
 

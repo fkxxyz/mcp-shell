@@ -162,6 +162,7 @@ test("MCP tool calls appear in activity history, detail, and SSE snapshot", asyn
   assert.match(received, /event: snapshot/);
   assert.ok(received.includes(project));
   assert.ok(received.includes("input_preview"));
+  assert.ok(received.includes('"recent_shells"'));
   controller.abort();
   await reader.cancel().catch(() => {});
 });
