@@ -129,6 +129,8 @@ Set `WEB_PASSWORD` to enable the read-only Web Console and its browser API:
 <base-url>/console/
 ```
 
+When enabled, opening `<base-url>/` redirects to `/console/`. When `WEB_PASSWORD` is unset, the root, Web Console, and browser API remain unavailable.
+
 Use HTTP Basic Auth username `activity` and the configured password. The Web credential is separate from MCP OAuth and is never accepted by `/mcp`. Remote use requires HTTPS.
 
 The current Web Console is read-only. Activity groups tool calls by Shell root directory, streams live lifecycle events over SSE, and exposes addressable Workspace, Shell, and tool-call detail routes. Full tool input/output is fetched only when a retained call is opened.

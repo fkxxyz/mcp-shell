@@ -115,7 +115,7 @@ The activity projection groups calls by Shell root `cwd` while preserving `shell
 
 ## Web Console HTTP and UI (`src/http/`, `web/`)
 
-The Web Console SPA is served from `/console/*` on the existing application listener. Browser JSON/SSE APIs are served from `/api/*`. Both namespaces share one HTTP Basic Auth boundary enabled by `WEB_PASSWORD`. `/mcp` remains on its existing OAuth/local-mode authority boundary; Web credentials are not accepted there.
+The Web Console SPA is served from `/console/*` on the existing application listener. Browser JSON/SSE APIs are served from `/api/*`. Both namespaces share one HTTP Basic Auth boundary enabled by `WEB_PASSWORD`. When that Web surface is enabled, `GET /` is an unauthenticated, non-cacheable `302` convenience redirect to `/console/`; when disabled, the root remains unmounted. `/mcp` remains on its existing OAuth/local-mode authority boundary; Web credentials are not accepted there.
 
 `web/src/app/` owns application composition and routing; `web/src/features/` owns feature behavior; route modules compose feature pages; `web/src/lib/` contains narrow browser infrastructure. Components stay feature-local until demonstrated cross-feature reuse.
 

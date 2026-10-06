@@ -19,8 +19,20 @@ test("Web Console and API are absent unless WEB_PASSWORD is configured", async (
   const ctx = await listen(makeLocalConfig(dir));
   t.after(() => cleanup(ctx, dir));
 
+  assert.equal((await fetch(`${ctx.baseUrl}/`)).status, 404);
   assert.equal((await fetch(`${ctx.baseUrl}/console/`)).status, 404);
   assert.equal((await fetch(`${ctx.baseUrl}/api/shells?cwd=/tmp`)).status, 404);
+});
+
+test("Web root redirects to the Console when the Web surface is enabled", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-activity-root-"));
+  const ctx = await listen(makeLocalConfig(dir, WEB_PASSWORD));
+  t.after(() => cleanup(ctx, dir));
+
+  const root = await fetch(`${ctx.baseUrl}/`, { redirect: "manual" });
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get("location"), "/console/");
+  assert.equal(root.headers.get("cache-control"), "no-store");
 });
 
 test("Web Console and API share one Basic Auth boundary with scoped caching", async (t) => {

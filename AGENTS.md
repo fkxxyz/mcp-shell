@@ -40,6 +40,7 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 - `GET /authorize`, `POST /authorize`: authorization UI and authorization-code issuance.
 - `POST /token`: authorization-code or refresh-token exchange.
 - `POST /mcp`, `GET /mcp`, `DELETE /mcp`: authenticated MCP Streamable HTTP session operations.
+- `GET /`: redirects to `/console/` when `WEB_PASSWORD` enables the Web surface; otherwise unmounted.
 - `/console/*`: optional Basic-authenticated Web Console SPA when `WEB_PASSWORD` is configured.
 - `/api/*`: optional Basic-authenticated, read-only browser JSON/SSE API enabled by the same `WEB_PASSWORD`.
 

@@ -67,6 +67,10 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
     }
     const requireWebAuth = createRequireWebBasicAuth(config.webPassword);
 
+    app.get("/", (_req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.redirect(302, "/console/");
+    });
     app.use("/api", webApiSecurityHeaders, requireWebAuth, createActivityApiRouter(query, activity));
     app.use("/console", webConsoleSecurityHeaders, requireWebAuth, createWebUiRouter(webRoot));
   }

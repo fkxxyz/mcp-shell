@@ -44,6 +44,7 @@ Introduce a first-class **Web Console** with these boundaries:
 - `/console/*` is the browser SPA namespace.
 - `/api/*` is the browser-facing JSON/SSE namespace.
 - `WEB_PASSWORD` enables both namespaces together; when absent, neither is mounted.
+- When the Web surface is enabled, `GET /` is a non-cacheable `302` convenience redirect to `/console/`; it is not part of the authenticated Web authority and remains absent when the Web surface is disabled.
 - Both namespaces use the same HTTP Basic Auth middleware. The fixed username remains `activity`; the configured password defines the authority.
 - Web credentials are never accepted by `/mcp`, and MCP bearer credentials are not exposed to browser code.
 - The current Web authority is read-only observation. It can query Shell/log facts and subscribe to Activity events but cannot execute tools, mutate configuration, delete logs, or manage Shell lifecycle.
@@ -94,6 +95,8 @@ Production starts `node dist/server/mcp-shell.js`. Express serves `dist/web` und
 When `WEB_PASSWORD` is configured in production, a missing Web build is a startup error rather than a partially working deployment.
 
 SPA fallback applies only inside `/console`. Missing `/console/assets/*` files remain 404; API, MCP, and OAuth paths never fall through to `index.html`.
+
+The application root is only a browser-discovery entry point. It redirects to `/console/` rather than hosting the SPA itself, preserving the explicit Web namespace and avoiding deployment-specific redirect rules in reverse proxies.
 
 The HTML shell and browser API responses are `Cache-Control: no-store`. Content-hashed Vite assets may be cached as immutable for one year.
 
