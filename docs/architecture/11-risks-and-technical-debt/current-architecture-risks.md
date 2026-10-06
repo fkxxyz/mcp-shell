@@ -161,20 +161,6 @@ Control: clients must reinitialize MCP sessions after reconnect. Do not infer MC
 - **Exit criteria:** interrupted/failed builds cannot alter the currently served release, successful deployment switches all server/Web artifacts as one unit, and rollback to the immediately previous release is explicit and bounded.
 - **Priority:** medium; failure probability is lower than day-to-day development costs, but the mismatch is now structural and affects every future production deployment.
 
-## Production Service Lifecycle Migration Is Incomplete
-
-- **Root cause:** repository ownership and verification of the systemd lifecycle contract are implemented, but the active user service still uses the pre-migration unmanaged unit and therefore has not converged to the repository-owned contract.
-- **Primary cost dimension:** operability and deployment correctness.
-- **Current cost:** the active service still uses `KillMode=control-group` and a 90-second stop timeout, so systemd can terminate tool descendants before the application's three-second completion opportunity even though the repository now defines and verifies the correct policy.
-- **Evidence:** the implementation work introduced the canonical service template plus `service:install` / `service:check`, while a deliberate dry run against the active unmanaged unit refused replacement and confirmed its checksum remained unchanged; effective systemd state therefore remains on the old policy until migration is explicitly performed from the durable deployment checkout.
-- **Cost mechanism:** source authority has converged, but deployed state has not. Until installation and restart complete, the running supervisor semantics can still contradict the application lifecycle contract.
-- **Reachable better state:** merge the repository-owned service contract into the durable deployment checkout, explicitly replace the old unmanaged unit from that checkout, restart once under the new unit, and verify effective systemd properties with `npm run service:check`.
-- **Governing constraint:** debt closure requires both repository ownership and deployed-state convergence; a temporary migration record remains current until the active service actually runs under the repository-owned lifecycle contract.
-- **Scope discovery:** verify the merged checkout, installed user unit, effective systemd properties, service restart behavior, and deployment entrypoint path; do not treat unrelated atomic-release work as part of this migration.
-- **Repair direction:** complete the one-time migration after merge. Do not add a second deployment framework or point production at a temporary worktree merely to satisfy the service contract early.
-- **Exit criteria:** the installed managed unit points at the durable deployment checkout, effective `KillMode=mixed` and `TimeoutStopUSec=15s` are verified after `daemon-reload`, the service has restarted successfully under that unit, and `npm run service:check` passes. Remove this temporary debt record immediately afterward.
-- **Priority:** high but short-lived; repository repair is complete, while the remaining production mismatch directly defeats shutdown semantics until the one-time migration converges.
-
 ## Host Process-Tree Lifecycle Is Split Across Tool Runtimes
 
 - **Root cause:** application-owned external processes do not share one complete process-tree lifecycle primitive. Bash/image subprocesses use `ProcessSupervisor`, while LSP clients own a separate process wrapper and protocol-aware stop path; platform-specific tree termination semantics therefore remain distributed.
