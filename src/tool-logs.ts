@@ -9,6 +9,8 @@ import { gzip } from "node:zlib";
 const gzipAsync = promisify(gzip);
 const DEFAULT_MAX_CALLS = 10_000;
 let callSequence = 0;
+let payloadRetentionKey: string | undefined;
+let payloadRetention: PayloadRetention | undefined;
 
 export type ToolLogContext = {
   session?: string;
@@ -119,9 +121,8 @@ async function persistToolCall(record: ToolCallRecord): Promise<void> {
   const logDir = getToolLogDir();
   const callsDir = join(logDir, "calls");
   const indexFile = join(logDir, "index.jsonl");
-  await mkdir(callsDir, { recursive: true, mode: 0o700 });
-  await chmod(logDir, 0o700);
-  await chmod(callsDir, 0o700);
+  const retention = getPayloadRetention(logDir, getMaxCalls());
+  await retention.initialize();
 
   const filename = `${fileTimestamp(record.started_at)}-${String(record.sequence).padStart(10, "0")}-${record.id}.json.gz`;
   const relativeFile = `calls/${filename}`;
@@ -130,8 +131,13 @@ async function persistToolCall(record: ToolCallRecord): Promise<void> {
   const json = JSON.stringify(record);
   const compressed = await gzipAsync(Buffer.from(json, "utf8"));
 
-  await writeFile(tempPath, compressed, { mode: 0o600 });
-  await rename(tempPath, finalPath);
+  try {
+    await writeFile(tempPath, compressed, { mode: 0o600 });
+    await rename(tempPath, finalPath);
+  } catch (error) {
+    await unlinkIfExists(tempPath);
+    throw error;
+  }
 
   const indexEntry = {
     id: record.id,
@@ -147,27 +153,129 @@ async function persistToolCall(record: ToolCallRecord): Promise<void> {
     file: relativeFile,
   };
 
-  await appendFile(indexFile, `${JSON.stringify(indexEntry)}\n`, { encoding: "utf8", mode: 0o600 });
-  await chmod(indexFile, 0o600);
-  await cleanupOldToolCalls(callsDir, getMaxCalls());
+  let indexFailed = false;
+  let indexError: unknown;
+  try {
+    await appendFile(indexFile, `${JSON.stringify(indexEntry)}\n`, { encoding: "utf8", mode: 0o600 });
+    await chmod(indexFile, 0o600);
+  } catch (error) {
+    indexFailed = true;
+    indexError = error;
+  }
+
+  try {
+    await retention.register(filename);
+  } catch (retentionError) {
+    if (indexFailed) {
+      throw new AggregateError(
+        [indexError, retentionError],
+        "Failed to persist tool log index and enforce payload retention",
+      );
+    }
+    throw retentionError;
+  }
+
+  if (indexFailed) throw indexError;
 }
 
-async function cleanupOldToolCalls(callsDir: string, maxCalls: number): Promise<void> {
-  const entries = await readdir(callsDir, { withFileTypes: true });
-  const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json.gz"))
-    .map((entry) => entry.name)
-    .sort();
+function getPayloadRetention(logDir: string, maxCalls: number): PayloadRetention {
+  const key = `${logDir}\0${maxCalls}`;
+  if (payloadRetention === undefined || payloadRetentionKey !== key) {
+    payloadRetention = new PayloadRetention(logDir, maxCalls);
+    payloadRetentionKey = key;
+  }
+  return payloadRetention;
+}
 
-  const excess = files.length - maxCalls;
-  if (excess <= 0) return;
+class PayloadRetention {
+  private readonly callsDir: string;
+  private readonly files = new Set<string>();
+  private initialization: Promise<void> | undefined;
+  private mutation = Promise.resolve();
 
-  for (const filename of files.slice(0, excess)) {
-    try {
-      await unlink(join(callsDir, filename));
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") throw error;
+  constructor(
+    private readonly logDir: string,
+    private readonly maxCalls: number,
+  ) {
+    this.callsDir = join(logDir, "calls");
+  }
+
+  initialize(): Promise<void> {
+    if (this.initialization === undefined) {
+      const initialization = this.initializeOnce();
+      this.initialization = initialization;
+      void initialization.catch(() => {
+        if (this.initialization === initialization) {
+          this.initialization = undefined;
+        }
+      });
     }
+    return this.initialization;
+  }
+
+  async register(filename: string): Promise<void> {
+    await this.initialize();
+    const task = this.mutation.then(() => this.registerSerialized(filename));
+    this.mutation = task.catch(() => {});
+    return task;
+  }
+
+  private async initializeOnce(): Promise<void> {
+    await mkdir(this.callsDir, { recursive: true, mode: 0o700 });
+    await chmod(this.logDir, 0o700);
+    await chmod(this.callsDir, 0o700);
+
+    this.files.clear();
+    const entries = await readdir(this.callsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".json.gz")) {
+        this.files.add(entry.name);
+      } else if (entry.isFile() && isToolLogTempFile(entry.name)) {
+        await unlinkIfExists(join(this.callsDir, entry.name));
+      }
+    }
+
+    await this.prune();
+  }
+
+  private async registerSerialized(filename: string): Promise<void> {
+    this.files.add(filename);
+    await this.prune();
+  }
+
+  private async prune(): Promise<void> {
+    while (this.files.size > this.maxCalls) {
+      const oldest = this.findOldest();
+      if (oldest === undefined) return;
+
+      try {
+        await unlink(join(this.callsDir, oldest));
+        this.files.delete(oldest);
+      } catch (error: any) {
+        if (error?.code !== "ENOENT") throw error;
+        this.files.delete(oldest);
+      }
+    }
+  }
+
+  private findOldest(): string | undefined {
+    let oldest: string | undefined;
+    for (const filename of this.files) {
+      if (oldest === undefined || filename < oldest) oldest = filename;
+    }
+    return oldest;
+  }
+}
+
+function isToolLogTempFile(filename: string): boolean {
+  return /^\.\d{8}T\d{6}\.\d{3}Z-\d{10}-[0-9a-f-]{36}\.json\.gz\.[0-9a-f-]{36}\.tmp$/.test(filename);
+}
+
+async function unlinkIfExists(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
   }
 }
 

@@ -64,7 +64,9 @@ The Shell is not owned by the MCP transport. The same root can have multiple ind
 3. The MCP SDK dispatches the selected registered tool.
 4. A Shell-aware tool resolves its `shell_id` through `ShellStore`; unknown IDs fail. Relative operations use the resolved Shell `cwd`.
 5. `recordToolCall` records start time and input, runs the tool, then persists either output or serialized error.
-6. The tool result or tool error is returned through the MCP transport.
+6. Before the first payload write for the active log-directory/retention configuration, payload retention scans `calls/` once, reconciles retained payloads and orphaned tool-log temporary files, and establishes runtime retention state. Initialization completes before new payloads are renamed into the directory.
+7. After a payload is atomically renamed into its final path, index persistence and retention enforcement are both attempted. A final payload remains enrolled in retention even when index persistence fails. Concurrent retention updates are serialized, the configured payload limit is enforced oldest-first, and steady-state calls do not rescan `calls/`; process restart rebuilds retention state from disk.
+8. The tool result or tool error is returned through the MCP transport.
 
 Logging persistence failure is written to stderr and does not convert a successful host action into a failed MCP tool result.
 

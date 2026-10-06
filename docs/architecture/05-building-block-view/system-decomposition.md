@@ -89,7 +89,7 @@ Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root 
 
 ## Tool Logging (`src/tool-logs.ts`)
 
-Owns asynchronous call context and per-call persistence. Complete call payloads are gzip-compressed; `index.jsonl` records lightweight metadata. Logging failure is reported but does not replace the tool result with a logging failure.
+Owns asynchronous call context, per-call persistence, and bounded payload retention. Complete call payloads are gzip-compressed; `index.jsonl` records lightweight metadata. Before the first payload write for one log-directory/retention configuration, retention scans `calls/` once, reconciles existing payloads and orphaned tool-log temporary files, and enforces the configured limit. Steady-state writes maintain retention incrementally without rescanning the directory. Once a final payload is present it remains governed by retention even if index persistence fails, and concurrent retention updates preserve the exact configured limit and oldest-first eviction order. A process restart rebuilds retention state from the payload directory; external directory changes made while the process is running are reconciled on the next rebuild. Logging failure is reported but does not replace the tool result with a logging failure.
 
 ## Dependency Direction
 
