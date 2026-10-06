@@ -44,6 +44,12 @@ Express, OAuth services, persisted authorization state, durable Shell state, MCP
 
 `src/mcp/` owns MCP server/session behavior. `src/tools/` owns concrete host capabilities. Tool modules register against `McpServer` and do not own HTTP exposure or OAuth.
 
+## Application-Owned Core Host Tools
+
+mcp-shell owns the semantics of `read`, `write`, `edit`, and `bash` instead of adapting a full coding-agent runtime. Node filesystem and child-process primitives implement the core behavior; the small direct `diff` dependency supplies edit diagnostics.
+
+Two narrow host control points cover cross-tool rules: `FileMutationCoordinator` serializes structured mutations of the same path across `write`, `edit`, `apply_patch`, and LSP rename, while `ProcessSupervisor` owns the lifecycle of tool-spawned processes such as Bash process groups and ImageMagick children. The governing decision and exact behavioral boundaries live in [Application-Owned Core Host Tools](09-architecture-decisions/application-owned-core-host-tools.md).
+
 ## Durable Shell Execution Context
 
 MCP sessions are transport state. Shells are durable execution-state handles for agents. `create_shell` assigns a monotonically increasing `shell_id` to an absolute root directory; subsequent host operations resolve relative paths from that Shell. Multiple Shells may use the same root while remaining distinct execution contexts.

@@ -27,6 +27,12 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Optional read-only Web Console with live Activity grouped by workspace
 - Guardrails for broad filesystem searches
 
+## Core tool behavior
+
+The Shell root is the base for relative paths, not a filesystem sandbox; absolute paths remain available to authorized callers.
+
+`read` streams text with a 2,000-line / 50 KiB return budget and uses `offset`/`limit` for continuation. `edit` performs unique exact-text replacement after newline normalization only and preserves BOM plus CRLF/LF style. `bash` runs Bash in the Shell working directory, reapplies the configured command-path policy, combines stdout/stderr as observed, and returns at most the most recent 2,000 lines / 50 KiB. Redirect large command output to a file when complete output is required.
+
 ## Security
 
 `mcp-shell` is intentionally powerful.

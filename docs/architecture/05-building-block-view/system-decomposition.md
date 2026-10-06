@@ -88,7 +88,7 @@ The `skill` tool uses exact case-sensitive name matching and returns the full cu
 Tool registration is modular:
 
 - `skill.ts`: lazy loading of one globally discovered skill;
-- `basic.ts`: `read`, `write`, `edit`, `bash` adapters around Pi coding-agent tools;
+- `basic.ts`: MCP registration for application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`;
 - `apply-patch.ts`: structured patch application;
 - `read-image.ts`: image inspection;
 - `lsp.ts`: definition, reference, symbol, diagnostic, and rename operations.
@@ -96,6 +96,8 @@ Tool registration is modular:
 Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root relative operations at that Shell's `cwd`. An unknown ID is rejected instead of falling back to process or server working directory. Tools do not decide network exposure or authorization.
 
 `src/tools/invoke.ts` is the shared Shell-aware invocation boundary. It centralizes Shell resolution plus tool-call recording so individual host-tool modules do not duplicate observability behavior.
+
+`src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking, and `ProcessSupervisor` owns shutdown/abort cleanup for registered tool child processes. These services are application-owned and shared across MCP sessions.
 
 ## Command Policy (`src/command-path.ts`, `bin/`)
 
@@ -128,13 +130,13 @@ Production serves Vite's content-hashed assets from `dist/web/` and the compiled
 ```text
 main -> config + http/app
 http/app -> auth + mcp + shell-store + skills + observability + activity-http
-mcp -> tools + shell-store + skills + tool-call-recorder
+mcp -> tools + shell-store + skills + tool-call-recorder + host coordination
 shell -> shell-store + skills
-tools -> shell-store + skills + tool-call-recorder
+tools -> shell-store + skills + tool-call-recorder + host coordination
 tool-call-recorder -> tool-log-store + activity-tracker
 activity-http -> activity-query + activity-tracker
 activity-query -> shell-store + tool-log-store + activity-tracker
-basic/lsp -> command-path
+basic/lsp/read-image -> command-path
 web -> browser contracts + /api HTTP/SSE only
 ```
 

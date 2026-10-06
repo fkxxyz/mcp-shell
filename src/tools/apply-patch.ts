@@ -1,7 +1,9 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createTwoFilesPatch, diffLines } from "diff";
 import { z } from "zod";
+import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
@@ -404,57 +406,21 @@ function deriveNewContentsFromChunks(filePath: string, source: TextFile, chunks:
 }
 
 function countChanges(oldContent: string, newContent: string): { additions: number; deletions: number } {
-	const oldLines = oldContent.length === 0 ? [] : oldContent.split("\n");
-	const newLines = newContent.length === 0 ? [] : newContent.split("\n");
-	const maxLen = Math.max(oldLines.length, newLines.length);
 	let additions = 0;
 	let deletions = 0;
 
-	for (let i = 0; i < maxLen; i++) {
-		const oldLine = oldLines[i];
-		const newLine = newLines[i];
-		if (oldLine === newLine) continue;
-		if (oldLine !== undefined) deletions++;
-		if (newLine !== undefined) additions++;
+	for (const part of diffLines(oldContent, newContent)) {
+		const lineCount = part.count ?? 0;
+		if (part.added) additions += lineCount;
+		if (part.removed) deletions += lineCount;
 	}
 
 	return { additions, deletions };
 }
 
-function createTwoFilesPatch(filePath: string, oldContent: string, newContent: string): string {
-	const oldLines = oldContent.length === 0 ? [] : oldContent.split("\n");
-	const newLines = newContent.length === 0 ? [] : newContent.split("\n");
-	const m = oldLines.length;
-	const n = newLines.length;
-	const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-
-	for (let i = m - 1; i >= 0; i--) {
-		for (let j = n - 1; j >= 0; j--) {
-			dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-		}
-	}
-
-	const body: string[] = [];
-	let i = 0;
-	let j = 0;
-	while (i < m && j < n) {
-		if (oldLines[i] === newLines[j]) {
-			body.push(` ${oldLines[i]}`);
-			i++;
-			j++;
-		} else if (dp[i + 1][j] >= dp[i][j + 1]) {
-			body.push(`-${oldLines[i]}`);
-			i++;
-		} else {
-			body.push(`+${newLines[j]}`);
-			j++;
-		}
-	}
-	while (i < m) body.push(`-${oldLines[i++]}`);
-	while (j < n) body.push(`+${newLines[j++]}`);
-
-	if (!body.some((line) => line.startsWith("+") || line.startsWith("-"))) return "";
-	return [`--- ${filePath}`, `+++ ${filePath}`, `@@ -1 +1 @@`, ...body].join("\n");
+function createPatch(filePath: string, oldContent: string, newContent: string): string {
+	if (oldContent === newContent) return "";
+	return createTwoFilesPatch(filePath, filePath, oldContent, newContent);
 }
 
 function resolvePatchPath(cwd: string, patchPath: string): string {
@@ -501,7 +467,7 @@ async function planChanges(hunks: Hunk[], cwd: string): Promise<{ fileChanges: F
 				const oldContent = state.text;
 				const newContent = hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`;
 				const next = splitBom(newContent);
-				const diff = createTwoFilesPatch(filePath, oldContent, next.text);
+				const diff = createPatch(filePath, oldContent, next.text);
 				const { additions, deletions } = countChanges(oldContent, next.text);
 				fileChanges.push({ filePath, oldContent, newContent: next.text, type: "add", diff, additions, deletions, bom: next.bom });
 				setState({ filePath, text: next.text, bom: next.bom, newline: "\n", exists: true });
@@ -530,7 +496,7 @@ async function planChanges(hunks: Hunk[], cwd: string): Promise<{ fileChanges: F
 						throw new Error(`apply_patch verification failed: Move target already exists: ${movePath}`);
 					}
 				}
-				const diff = createTwoFilesPatch(filePath, source.text, fileUpdate.content);
+				const diff = createPatch(filePath, source.text, fileUpdate.content);
 				const { additions, deletions } = countChanges(source.text, fileUpdate.content);
 				fileChanges.push({
 					filePath,
@@ -556,7 +522,7 @@ async function planChanges(hunks: Hunk[], cwd: string): Promise<{ fileChanges: F
 			case "delete": {
 				const source = await getState(filePath);
 				if (!source.exists) throw new Error(`apply_patch verification failed: File does not exist: ${filePath}`);
-				const diff = createTwoFilesPatch(filePath, source.text, "");
+				const diff = createPatch(filePath, source.text, "");
 				fileChanges.push({
 					filePath,
 					oldContent: source.text,
@@ -600,7 +566,12 @@ async function applyChanges(fileChanges: FileChange[]): Promise<void> {
 	}
 }
 
-export function registerApplyPatchTool(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder) {
+export function registerApplyPatchTool(
+	server: McpServer,
+	shells: ShellStore,
+	recorder: ToolCallRecorder,
+	mutations: FileMutationCoordinator,
+) {
 	return server.registerTool("apply_patch", {
 		description: DESCRIPTION,
 		inputSchema: {
@@ -631,23 +602,33 @@ export function registerApplyPatchTool(server: McpServer, shells: ShellStore, re
 		const { patchText } = input;
 		const cwd = shell.cwd;
 		const signal = extra.signal;
-			if (signal?.aborted) throw new Error("aborted");
-			if (!patchText) throw new Error("patchText is required");
+		if (signal?.aborted) throw new Error("aborted");
+		if (!patchText) throw new Error("patchText is required");
 
-			let hunks: Hunk[];
-			try {
-				({ hunks } = parsePatch(patchText));
-			} catch (error) {
-				throw new Error(`apply_patch verification failed: ${error}`);
+		let hunks: Hunk[];
+		try {
+			({ hunks } = parsePatch(patchText));
+		} catch (error) {
+			throw new Error(`apply_patch verification failed: ${error}`);
+		}
+
+		if (hunks.length === 0) {
+			const normalized = patchText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+			if (normalized === "*** Begin Patch\n*** End Patch") throw new Error("patch rejected: empty patch");
+			throw new Error("apply_patch verification failed: no hunks found");
+		}
+
+		const mutationPaths = hunks.flatMap((hunk) => {
+			const source = resolvePatchPath(cwd, hunk.path);
+			if (hunk.type === "update" && hunk.move_path) {
+				return [source, resolvePatchPath(cwd, hunk.move_path)];
 			}
+			return [source];
+		});
 
-			if (hunks.length === 0) {
-				const normalized = patchText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-				if (normalized === "*** Begin Patch\n*** End Patch") throw new Error("patch rejected: empty patch");
-				throw new Error("apply_patch verification failed: no hunks found");
-			}
-
+		return mutations.runExclusive(mutationPaths, async () => {
 			const { fileChanges, totalDiff } = await planChanges(hunks, cwd);
+			if (signal?.aborted) throw new Error("aborted");
 			const files = fileChanges.map((change) => ({
 				filePath: change.filePath,
 				relativePath: toRelative(cwd, change.movePath ?? change.filePath),
@@ -658,6 +639,7 @@ export function registerApplyPatchTool(server: McpServer, shells: ShellStore, re
 				movePath: change.movePath,
 			}));
 
+			// Once mutation starts, finish the planned patch rather than aborting mid-apply.
 			await applyChanges(fileChanges);
 
 			const summaryLines = fileChanges.map((change) => {
@@ -683,5 +665,6 @@ export function registerApplyPatchTool(server: McpServer, shells: ShellStore, re
 					diagnostics: {},
 				},
 			};
-		}));
+		});
+	}));
 }

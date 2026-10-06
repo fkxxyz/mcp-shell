@@ -4,7 +4,7 @@
 
 This repository contains a small, single-process local-or-remote MCP server with an optional read-only Web Console. It combines MCP Streamable HTTP, mode-dependent OAuth, durable host-tool state, observability, and browser inspection in one Node application.
 
-The MCP server exposes Pi-compatible file and shell tools, a structured patch tool, and six LSP tools. Authorized callers can read and modify host files and execute arbitrary shell commands as the server process user. Treat access tokens as full host-user access.
+The MCP server exposes application-owned file and shell tools, a structured patch tool, and six LSP tools. Authorized callers can read and modify host files and execute arbitrary shell commands as the server process user. Treat access tokens as full host-user access.
 
 ## Architecture
 
@@ -16,9 +16,9 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 - `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
 - `src/observability/` owns the unified tool-call lifecycle, gzip payload logging, lightweight `index.jsonl` metadata, bounded live activity projection, and activity read models.
 - `src/contracts/` owns browser/server DTO shapes for the Web API without exposing backend implementation objects.
-- `src/tools/` contains modular MCP registrations. `basic.ts` adapts Pi's built-in `read`, `write`, `edit`, and `bash` tools; `apply-patch.ts` and `lsp.ts` adapt Pi code-extension implementations.
+- `src/tools/` contains modular MCP registrations and tool implementations. `basic.ts` registers application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`; `apply-patch.ts` and `lsp.ts` provide structured patching and language-server operations.
+- `src/host/` contains narrow cross-tool host mechanisms for path resolution, structured file-mutation coordination, and supervised child-process lifecycle.
 - `web/` is the React + TypeScript Web Console built by Vite. TanStack Router owns routes, TanStack Query owns request-derived server state, and the Activity feature keeps SSE/live ordering logic feature-local.
-- `@earendil-works/pi-coding-agent` supplies the built-in Pi tool implementations. MCP input schemas are declared locally with Zod.
 - Express handles HTTP routes and form/JSON parsing.
 - `@modelcontextprotocol/sdk` implements the MCP server and Streamable HTTP transport.
 - OAuth authorization codes, access tokens, and refresh tokens are held in memory and persisted to `~/.mcp-shell/state.json` using atomic rename. The config and state directory/files are created with restrictive permissions.
@@ -67,7 +67,7 @@ OAuth resource identity:
 
 Optional settings: `PORT` (defaults to `3000`), `OAUTH_RESOURCE_ALIASES`, `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), `TOOL_LOG_MAX_CALLS` (defaults to `10000`), and `WEB_PASSWORD`. Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. `WEB_PASSWORD` enables both `/console/*` and `/api/*`; the fixed Basic Auth username is `activity`. The Web authority is currently read-only and is distinct from MCP authority. The server listens on `0.0.0.0` in remote mode and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
 
-Command lookup uses a pinned PATH prefix. `~/.mcp-shell/bin` is always the first entry and is the user override layer; this repository's `bin/` directory is always second and is the repository default/guardrail layer. The remaining PATH follows afterward. The prefix is normalized again at child-process spawn boundaries so Pi, LSP configuration, or other environment rewriting cannot move those two entries behind another directory. User overrides intentionally take precedence over repository wrappers, so this mechanism is a customization and guardrail layer, not a security boundary against an authorized caller.
+Command lookup uses a pinned PATH prefix. `~/.mcp-shell/bin` is always the first entry and is the user override layer; this repository's `bin/` directory is always second and is the repository default/guardrail layer. The remaining PATH follows afterward. The prefix is normalized again at child-process spawn boundaries so host-tool, LSP, or other environment rewriting cannot move those two entries behind another directory. User overrides intentionally take precedence over repository wrappers, so this mechanism is a customization and guardrail layer, not a security boundary against an authorized caller.
 
 The repository command layer wraps `rg`, `find`, `fd`, and `grep` with a 200ms wall-clock search budget. Searches that exceed the budget are terminated and report `MCP_SEARCH_TIMEOUT`; output produced before termination remains visible. If a broad search is only needed because the required location or context is unknown, report that the available information is insufficient instead of forcing a filesystem-wide search. If a broad or slow search is genuinely required, rerun with the wrapper-only `--unsafe` argument anywhere in the arguments; the wrapper removes it before invoking the real command.
 
@@ -85,7 +85,7 @@ npm run dev
 
 - One configured OAuth client and one owner password; no user accounts or login sessions.
 - OAuth behavior is a deliberately minimal implementation, not a general-purpose identity provider.
-- Authorization grants the advertised `full` scope. Registered tools include arbitrary shell execution and file operations as the server process user; absolute paths are accepted by the Pi tools.
+- Authorization grants the advertised `full` scope. Registered tools include arbitrary shell execution and file operations as the server process user; Shell roots are relative-path bases rather than filesystem sandboxes, and absolute paths remain accepted.
 - LSP tools require compatible language servers and project LSP configuration. Rename applies returned workspace edits directly.
 - Token state is shared through a local JSON file, not a database or distributed store. Multiple server instances are not coordinated.
 - The Web Console and backend are one repository, one release, one origin, and one production deployment unit; there is no independent frontend service or SSR layer.

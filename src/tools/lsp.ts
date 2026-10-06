@@ -21,6 +21,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Type } from "typebox";
 import { z } from "zod";
 import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
@@ -1773,6 +1774,31 @@ function applyTextEditsToFile(filePath: string, edits: TextEdit[]): { success: b
   }
 }
 
+function workspaceEditPaths(edit: WorkspaceEdit | null): string[] {
+  if (!edit) return [];
+
+  const paths: string[] = [];
+  if (edit.changes) {
+    for (const uri of Object.keys(edit.changes)) paths.push(uriToPath(uri));
+  }
+
+  if (edit.documentChanges) {
+    for (const change of edit.documentChanges) {
+      if ("kind" in change) {
+        if (change.kind === "rename") {
+          paths.push(uriToPath(change.oldUri), uriToPath(change.newUri));
+        } else {
+          paths.push(uriToPath(change.uri));
+        }
+      } else {
+        paths.push(uriToPath(change.textDocument.uri));
+      }
+    }
+  }
+
+  return paths;
+}
+
 function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
   if (!edit) {
     return { success: false, filesModified: [], totalEdits: 0, errors: ["No edit provided"] }
@@ -1966,7 +1992,13 @@ function errorText(error: unknown): ToolTextResult {
   return textResult(`Error: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-export function registerLspTools(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder, commandPath: CommandPathPolicy) {
+export function registerLspTools(
+  server: McpServer,
+  shells: ShellStore,
+  recorder: ToolCallRecorder,
+  commandPath: CommandPathPolicy,
+  mutations: FileMutationCoordinator,
+) {
   const schemas: Record<string, Record<string, z.ZodType>> = {
     lsp_goto_definition: {
       shell_id: shellIdSchema, filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
@@ -2199,7 +2231,10 @@ export function registerLspTools(server: McpServer, shells: ShellStore, recorder
       try {
         const filePath = normalizePath(ctx.cwd, params.filePath);
         const edit = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.rename(filePath, params.line, params.character, params.newName) as Promise<WorkspaceEdit | null>);
-        const result = applyWorkspaceEdit(edit);
+        const result = await mutations.runExclusive(
+          workspaceEditPaths(edit),
+          async () => applyWorkspaceEdit(edit),
+        );
         return textResult(formatApplyResult(result), result as unknown as Record<string, unknown>);
       } catch (error) {
         return errorText(error);

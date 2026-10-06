@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { CommandPathPolicy } from "../command-path.js";
+import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
+import type { ProcessSupervisor } from "../host/process-supervisor.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import type { SkillCatalog } from "../skills.js";
@@ -15,6 +17,8 @@ export class McpSessionManager {
     private readonly recorder: ToolCallRecorder,
     private readonly commandPath: CommandPathPolicy,
     private readonly skills: SkillCatalog,
+    private readonly mutations: FileMutationCoordinator,
+    private readonly processes: ProcessSupervisor,
   ) {}
 
   get(sessionId: string | undefined): StreamableHTTPServerTransport | undefined {
@@ -42,7 +46,14 @@ export class McpSessionManager {
       if (id) this.transports.delete(id);
     };
 
-    const server = createMcpServer(this.shells, this.recorder, this.commandPath, this.skills);
+    const server = createMcpServer(
+      this.shells,
+      this.recorder,
+      this.commandPath,
+      this.skills,
+      this.mutations,
+      this.processes,
+    );
     await server.connect(transport);
     return transport;
   }

@@ -113,6 +113,20 @@ Control: treat the reachable skill tree as operator-managed configuration and ke
 - **Exit criteria:** either evidence establishes that complete-body scan cost is immaterial across the supported operating range, or discovery no longer reads unrelated complete bodies and `skill` loads the full body only for the resolved winner while all current semantics remain covered.
 - **Priority:** low; the scaling mechanism is credible and avoidable, but current materiality is unmeasured and an eager optimization would add parser/I/O complexity.
 
+## Structured Multi-File Mutations Are Not Failure-Atomic
+
+- **Root cause:** multi-file mutation paths plan or receive a set of changes, then apply filesystem operations sequentially without a commit/rollback boundary.
+- **Primary cost dimension:** correctness and recovery.
+- **Current cost:** `apply_patch` and LSP rename can report failure after earlier files in the same logical operation were already modified. Callers must treat a failed multi-file mutation as potentially partially applied and may need manual inspection or recovery.
+- **Evidence:** `apply_patch` plans all requested changes but applies writes, moves, and deletes one-by-one; LSP workspace edits likewise process file edits/create/rename/delete operations sequentially and explicitly retain the list of files modified before a later failure.
+- **Cost mechanism:** validation reduces pre-apply errors, and `FileMutationCoordinator` now prevents competing in-process structured mutations during the critical section, but neither mechanism can undo a filesystem failure that occurs after earlier mutations have committed.
+- **Reachable better state:** define an explicit failure-atomicity contract for structured multi-file mutations, then implement the smallest staging/commit/rollback mechanism that satisfies it for supported write, create, delete, and move semantics. The design may deliberately document bounded non-atomic cases where host-filesystem guarantees make full rollback unsafe or impossible.
+- **Governing constraint:** a multi-file structured mutation must either complete according to its declared commit semantics or return enough explicit state for deterministic recovery; a generic failure must not falsely imply that no changes occurred.
+- **Scope discovery:** include `apply_patch`, LSP workspace edits and rename, shared mutation coordination, file creation/deletion/move semantics, symlinks, permissions, cross-filesystem moves, interruption/crash behavior, tool results, logs, and contract tests before selecting a transaction model.
+- **Repair direction:** design the failure model first. Do not bolt temporary backups or rename-based pseudo-transactions onto individual tools without proving their behavior across the full mutation scope.
+- **Exit criteria:** supported multi-file mutation paths have one explicit commit/failure contract, tests cover failure after partial progress, tool results unambiguously describe residual state, and any staged rollback mechanism is validated for the filesystem operations it claims to cover.
+- **Priority:** medium; partial application is a real correctness/recovery risk, but repair crosses several filesystem semantics and is not appropriate as incidental cleanup during host-tool dependency replacement.
+
 ## MCP Session State Is Ephemeral
 
 Process restart ends all MCP sessions while durable Shell state and OAuth access tokens may survive in persisted state.
@@ -146,20 +160,6 @@ Control: clients must reinitialize MCP sessions after reconnect. Do not infer MC
 - **Repair direction:** design the smallest release-directory or atomic symlink/rename workflow that preserves the single-process deployment; do not introduce a separate frontend deployment system.
 - **Exit criteria:** interrupted/failed builds cannot alter the currently served release, successful deployment switches all server/Web artifacts as one unit, and rollback to the immediately previous release is explicit and bounded.
 - **Priority:** medium; failure probability is lower than day-to-day development costs, but the mismatch is now structural and affects every future production deployment.
-
-## Pi Tool Dependency Chain Contains Known Production Vulnerabilities
-
-- **Root cause:** the direct host-tool dependency `@earendil-works/pi-coding-agent@0.84.1` currently brings transitive versions with known security advisories, while the audit-recommended complete remediation crosses a breaking major-version boundary of the direct dependency.
-- **Primary cost dimension:** security and upgrade risk.
-- **Current cost:** `npm audit --omit=dev` reports three production vulnerabilities (one moderate, two high). The installed Pi dependency brings `brace-expansion@5.0.9` and `undici@8.9.0`; blindly applying the full audit fix would upgrade the Pi package to `1.0.4`, potentially changing host-tool behavior and adapters.
-- **Evidence:** dependency inspection on 2026-10-06 showed `@earendil-works/pi-coding-agent@0.84.1 -> minimatch@10.2.5 -> brace-expansion@5.0.9` and `-> undici@8.9.0`. npm reports complete remediation via a breaking Pi upgrade.
-- **Cost mechanism:** security exposure and remediation risk are coupled to a third-party package that supplies core file/shell tool behavior, so deferring assessment leaves uncertainty while forcing an upgrade without qualification risks semantic regressions in high-authority tools.
-- **Reachable better state:** determine whether vulnerable paths are reachable in mcp-shell's actual Pi usage, identify whether safe transitive overrides or a non-breaking Pi release eliminate them, and otherwise perform a deliberate Pi major upgrade with focused tool-contract regression coverage.
-- **Governing constraint:** known production dependency vulnerabilities on reachable paths must have either a supported remediation or an explicit, evidence-based risk disposition; host-tool core dependencies must not be force-upgraded without semantic validation.
-- **Scope discovery:** inspect npm advisory paths, actual imported Pi capabilities, network/WebSocket use, glob/minimatch inputs, available patched transitive versions, Pi release notes/API changes, and existing basic-tool contract tests.
-- **Repair direction:** perform reachability and upgrade assessment first. Prefer supported non-breaking remediation when possible; otherwise isolate the major upgrade as its own change and verify read/write/edit/bash semantics before adoption.
-- **Exit criteria:** affected advisory paths are either removed/patched or documented as unreachable with evidence, `npm audit --omit=dev` no longer reports unaccepted reachable production vulnerabilities, and any Pi upgrade preserves the intended host-tool contracts.
-- **Priority:** medium; severity is material, but actual reachability and safest remediation are not yet established.
 
 ## Shell History Grows Monotonically
 

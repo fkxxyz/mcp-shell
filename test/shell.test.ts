@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -217,6 +217,33 @@ test("MCP create_shell feeds shell_id into relative file operations", async () =
       .map((item) => item.text ?? "")
       .join("\n");
     assert.match(text, /hello from shell/);
+
+    await client.callTool({
+      name: "write",
+      arguments: { shell_id: shellId, path: "nested/generated.txt", content: "alpha\nbeta\n" },
+    });
+    assert.equal(await readFile(join(project, "nested/generated.txt"), "utf8"), "alpha\nbeta\n");
+
+    await client.callTool({
+      name: "edit",
+      arguments: {
+        shell_id: shellId,
+        path: "nested/generated.txt",
+        edits: [{ oldText: "beta", newText: "gamma" }],
+      },
+    });
+    assert.equal(await readFile(join(project, "nested/generated.txt"), "utf8"), "alpha\ngamma\n");
+
+    const bash = await client.callTool({
+      name: "bash",
+      arguments: { shell_id: shellId, command: "pwd; cat nested/generated.txt" },
+    });
+    const bashText = (bash.content as Array<{ type: string; text?: string }>)
+      .filter((item) => item.type === "text")
+      .map((item) => item.text ?? "")
+      .join("\n");
+    assert.ok(bashText.includes(project));
+    assert.match(bashText, /alpha\ngamma/);
   } finally {
     await client.close().catch(() => {});
     await new Promise<void>((resolve, reject) => {

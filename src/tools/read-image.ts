@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import { resolveHostPath } from "../host/paths.js";
+import type { ProcessSupervisor } from "../host/process-supervisor.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
@@ -68,12 +68,6 @@ function detectRasterMimeType(bytes: Uint8Array): string | undefined {
   return undefined;
 }
 
-function expandHomePath(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
-  return path;
-}
-
 function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | undefined {
   for (let offset = 2; offset + 8 < bytes.length; ) {
     if (bytes[offset] !== 0xff) {
@@ -110,6 +104,7 @@ async function normalizeWithImageMagick(
   quality: number,
   signal: AbortSignal | undefined,
   commandPath: CommandPathPolicy,
+  processes: ProcessSupervisor,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn("magick", [
@@ -127,10 +122,12 @@ async function normalizeWithImageMagick(
     ], {
       stdio: ["pipe", "pipe", "pipe"],
       env: applyCommandPath(process.env, commandPath),
+      detached: true,
     });
+    processes.track(child, { processGroup: true });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
-    const abort = () => child.kill("SIGTERM");
+    const abort = () => processes.terminate(child);
 
     signal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -158,9 +155,17 @@ async function encodeForVision(
   bytes: Uint8Array,
   signal: AbortSignal | undefined,
   commandPath: CommandPathPolicy,
+  processes: ProcessSupervisor,
 ) {
   for (const profile of outputProfiles) {
-    const data = await normalizeWithImageMagick(bytes, profile.maxDimension, profile.quality, signal, commandPath);
+    const data = await normalizeWithImageMagick(
+      bytes,
+      profile.maxDimension,
+      profile.quality,
+      signal,
+      commandPath,
+      processes,
+    );
 
     if (data.byteLength <= MAX_OUTPUT_BYTES) {
       const dimensions = jpegDimensions(data);
@@ -177,8 +182,10 @@ export async function readImage(
   inputPath: string,
   signal: AbortSignal | undefined,
   commandPath: CommandPathPolicy,
+  processes: ProcessSupervisor,
 ) {
-  const imagePath = resolve(cwd, expandHomePath(inputPath));
+  if (signal?.aborted) throw new Error("Image processing was cancelled.");
+  const imagePath = resolveHostPath(cwd, inputPath);
   const imageStat = await stat(imagePath);
   if (!imageStat.isFile()) {
     throw new Error("Image path must refer to a regular file.");
@@ -193,7 +200,7 @@ export async function readImage(
     throw new Error("Unsupported image format. Use PNG, JPEG, GIF, or WebP.");
   }
 
-  const image = await encodeForVision(bytes, signal, commandPath);
+  const image = await encodeForVision(bytes, signal, commandPath, processes);
   return {
     content: [
       {
@@ -209,7 +216,13 @@ export async function readImage(
   };
 }
 
-export function registerReadImageTool(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder, commandPath: CommandPathPolicy) {
+export function registerReadImageTool(
+  server: McpServer,
+  shells: ShellStore,
+  recorder: ToolCallRecorder,
+  commandPath: CommandPathPolicy,
+  processes: ProcessSupervisor,
+) {
   return server.registerTool("read_image", {
     title: "Read Image",
     description:
@@ -227,6 +240,6 @@ export function registerReadImageTool(server: McpServer, shells: ShellStore, rec
       openWorldHint: false,
     },
   }, async (input, extra) => invokeShellTool(recorder, shells, "read_image", input, (shell) =>
-    readImage(shell.cwd, input.path, extra.signal, commandPath)
+    readImage(shell.cwd, input.path, extra.signal, commandPath, processes)
   ));
 }

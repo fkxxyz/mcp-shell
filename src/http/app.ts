@@ -4,6 +4,8 @@ import { createOAuthRouter } from "../auth/routes.js";
 import { OAuthService } from "../auth/oauth-service.js";
 import { AuthStateStore } from "../auth/state-store.js";
 import { createRequireBearer } from "../auth/middleware.js";
+import { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
+import { ProcessSupervisor } from "../host/process-supervisor.js";
 import { McpSessionManager } from "../mcp/session-manager.js";
 import { createMcpRouter } from "../mcp/routes.js";
 import { ActivityQuery } from "../observability/activity-query.js";
@@ -58,7 +60,16 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
 
   const recorder = new ToolCallRecorder(logs, activity);
   const query = new ActivityQuery(shells, logs, activity);
-  const sessions = new McpSessionManager(shells, recorder, config.commandPath, skills);
+  const mutations = new FileMutationCoordinator();
+  const processes = new ProcessSupervisor();
+  const sessions = new McpSessionManager(
+    shells,
+    recorder,
+    config.commandPath,
+    skills,
+    mutations,
+    processes,
+  );
 
   if (config.webPassword) {
     const webRoot = dependencies.webRoot ?? defaultWebRoot();
@@ -83,6 +94,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
       async close() {
         activity.close();
         await sessions.closeAll();
+        await processes.close();
         shells.close();
       },
     };
@@ -106,6 +118,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
       clearInterval(cleanupTimer);
       activity.close();
       await sessions.closeAll();
+      await processes.close();
       await authState.persist();
       shells.close();
     },

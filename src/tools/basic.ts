@@ -1,131 +1,129 @@
-import {
-	createBashTool,
-	createEditTool,
-	createReadTool,
-	createWriteTool,
-} from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { extname } from "node:path";
 import { z } from "zod";
-import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import type { CommandPathPolicy } from "../command-path.js";
+import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
+import type { ProcessSupervisor } from "../host/process-supervisor.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
+import { runBash } from "./basic/bash.js";
+import { editTextFile } from "./basic/edit.js";
+import { readTextFile } from "./basic/read.js";
+import { writeTextFile } from "./basic/write.js";
 import { shellIdSchema } from "./shell.js";
 
-const contentBlockSchema = z.union([
-	z.object({ type: z.literal("text"), text: z.string() }),
-	z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string() }),
-]);
-
+const contentBlockSchema = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+});
 const detailsSchema = z.record(z.string(), z.unknown()).nullable();
+const basicOutputSchema = {
+  content: z.array(contentBlockSchema),
+  details: detailsSchema,
+};
 
-function registerPiTool(
-	server: McpServer,
-	shells: ShellStore,
-	recorder: ToolCallRecorder,
-	name: string,
-	description: string,
-	inputSchema: Record<string, z.ZodType>,
-	annotations: {
-		readOnlyHint: boolean;
-		destructiveHint: boolean;
-		idempotentHint: boolean;
-		openWorldHint: boolean;
-	},
-	toolFactory: (cwd: string) => { execute: (id: string, args: any, signal?: AbortSignal, onUpdate?: (result: any) => void, context?: any) => Promise<any> },
+export function registerBasicTools(
+  server: McpServer,
+  shells: ShellStore,
+  recorder: ToolCallRecorder,
+  commandPath: CommandPathPolicy,
+  mutations: FileMutationCoordinator,
+  processes: ProcessSupervisor,
 ) {
-	return server.registerTool(name, {
-		description,
-		inputSchema: { shell_id: shellIdSchema, ...inputSchema },
-		annotations,
-		outputSchema: {
-			content: z.array(contentBlockSchema),
-			details: detailsSchema,
-		},
-	}, async (args, extra) => invokeShellTool(recorder, shells, name, args, async (shell) => {
-		const { shell_id: _shellId, ...toolArgs } = args;
-		const result = await toolFactory(shell.cwd).execute(`mcp-${name}`, toolArgs, extra.signal, undefined, {});
-		return {
-			content: result.content,
-			structuredContent: {
-				content: result.content,
-				details: result.details ?? null,
-			},
-		};
-	}));
-}
+  server.registerTool("read", {
+    description:
+      "Read the contents of a text file. Images are not supported; use read_image for image files. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+    inputSchema: {
+      shell_id: shellIdSchema,
+      path: z.string().describe("Path to the file to read (relative to the shell root or absolute)"),
+      offset: z.number().int().positive().optional().describe("Line number to start reading from (1-indexed)"),
+      limit: z.number().int().positive().optional().describe("Maximum number of lines to read"),
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    outputSchema: basicOutputSchema,
+  }, async (input, extra) => invokeShellTool(recorder, shells, "read", input, async (shell) => {
+    const result = await readTextFile(shell.cwd, input, extra.signal);
+    return {
+      content: result.content,
+      structuredContent: result,
+    };
+  }));
 
-export function registerBasicTools(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder, commandPath: CommandPathPolicy) {
-	const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
-	const textReadDescription =
-		"Read the contents of a text file. Images are not supported; use read_image for image files. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.";
-	const createTextRead = (cwd: string) => {
-		const read = createReadTool(cwd);
-		return {
-			...read,
-			description: textReadDescription,
-			async execute(id: string, args: any, signal?: AbortSignal, onUpdate?: (result: any) => void, context?: any) {
-				if (imageExtensions.has(extname(args.path).toLowerCase())) {
-					throw new Error("read only supports text files. Use read_image for image files.");
-				}
+  server.registerTool("write", {
+    description:
+      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+    inputSchema: {
+      shell_id: shellIdSchema,
+      path: z.string().describe("Path to the file to write (relative to the shell root or absolute)"),
+      content: z.string().describe("Content to write to the file"),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    outputSchema: basicOutputSchema,
+  }, async (input, extra) => invokeShellTool(recorder, shells, "write", input, async (shell) => {
+    const result = await writeTextFile(shell.cwd, input, mutations, extra.signal);
+    return {
+      content: result.content,
+      structuredContent: result,
+    };
+  }));
 
-				const result = await read.execute(id, args, signal, onUpdate);
-				if (result.content?.some((item: { type?: string }) => item.type === "image")) {
-					throw new Error("read only supports text files. Use read_image for image files.");
-				}
-				return result;
-			},
-		};
-	};
-	const createBash = (cwd: string) => createBashTool(cwd, {
-		exposeSessionEnvironment: false,
-		spawnHook(context) {
-			return {
-				...context,
-				env: applyCommandPath(context.env, commandPath),
-			};
-		},
-	});
+  server.registerTool("edit", {
+    description:
+      "Edit a single file using exact text replacement. Every edits[].oldText must match one unique, non-overlapping region of the original file after line-ending normalization. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits.",
+    inputSchema: {
+      shell_id: shellIdSchema,
+      path: z.string().describe("Path to the file to edit (relative to the shell root or absolute)"),
+      edits: z.array(z.object({
+        oldText: z.string().describe("Exact text to replace"),
+        newText: z.string().describe("Replacement text"),
+      })).min(1).describe("Targeted, unique, non-overlapping replacements"),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    outputSchema: basicOutputSchema,
+  }, async (input, extra) => invokeShellTool(recorder, shells, "edit", input, async (shell) => {
+    const result = await editTextFile(shell.cwd, input, mutations, extra.signal);
+    return {
+      content: result.content,
+      structuredContent: result,
+    };
+  }));
 
-	registerPiTool(server, shells, recorder, "read", textReadDescription, {
-		path: z.string().describe("Path to the file to read (relative to the shell root or absolute)"),
-		offset: z.number().optional().describe("Line number to start reading from (1-indexed)"),
-		limit: z.number().optional().describe("Maximum number of lines to read"),
-	}, {
-		readOnlyHint: true,
-		destructiveHint: false,
-		idempotentHint: true,
-		openWorldHint: false,
-	}, createTextRead);
-	registerPiTool(server, shells, recorder, "write", createWriteTool("/").description, {
-		path: z.string().describe("Path to the file to write (relative to the shell root or absolute)"),
-		content: z.string().describe("Content to write to the file"),
-	}, {
-		readOnlyHint: false,
-		destructiveHint: true,
-		idempotentHint: true,
-		openWorldHint: false,
-	}, createWriteTool);
-	registerPiTool(server, shells, recorder, "edit", createEditTool("/").description, {
-		path: z.string().describe("Path to the file to edit (relative to the shell root or absolute)"),
-		edits: z.array(z.object({
-			oldText: z.string().describe("Exact text to replace"),
-			newText: z.string().describe("Replacement text"),
-		})).min(1).describe("Targeted, unique, non-overlapping replacements"),
-	}, {
-		readOnlyHint: false,
-		destructiveHint: true,
-		idempotentHint: false,
-		openWorldHint: false,
-	}, createEditTool);
-	registerPiTool(server, shells, recorder, "bash", createBash("/").description, {
-		command: z.string().describe("Bash command to execute"),
-		timeout: z.number().positive().optional().describe("Timeout in seconds; no timeout by default"),
-	}, {
-		readOnlyHint: false,
-		destructiveHint: true,
-		idempotentHint: false,
-		openWorldHint: true,
-	}, createBash);
+  server.registerTool("bash", {
+    description:
+      "Execute a bash command in the Shell working directory. Returns combined stdout and stderr in observed arrival order. Output is truncated to the last 2000 lines or 50KB (whichever is hit first). Redirect output to a file when complete large output is required.",
+    inputSchema: {
+      shell_id: shellIdSchema,
+      command: z.string().describe("Bash command to execute"),
+      timeout: z.number().finite().positive().max(2_147_483.647).optional()
+        .describe("Timeout in seconds; no timeout by default"),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    outputSchema: basicOutputSchema,
+  }, async (input, extra) => invokeShellTool(recorder, shells, "bash", input, async (shell) => {
+    const result = await runBash(shell.cwd, input, commandPath, processes, extra.signal);
+    return {
+      content: result.content,
+      structuredContent: result,
+    };
+  }));
 }
