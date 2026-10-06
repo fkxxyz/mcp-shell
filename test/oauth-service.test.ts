@@ -17,15 +17,31 @@ function authorizeParams(verifier = "verifier-value"): AuthorizeParams {
   };
 }
 
-test("validateAuthorizeParams accepts the configured OAuth request", async (t) => {
+test("validateAuthorizeParams accepts the primary resource and configured aliases", async (t) => {
   const { store, dir } = await makeStore();
   t.after(async () => {
     await store.persist();
     await rm(dir, { recursive: true, force: true });
   });
-  const oauth = new OAuthService(makeConfig(), store);
+  const oauth = new OAuthService(makeConfig({
+    resourceAliases: ["https://tunnel.example.test/v1/mcp/tunnel-1"],
+  }), store);
 
   assert.deepEqual(oauth.validateAuthorizeParams(authorizeParams()), { ok: true });
+  assert.deepEqual(
+    oauth.validateAuthorizeParams({
+      ...authorizeParams(),
+      resource: "https://tunnel.example.test/v1/mcp/tunnel-1",
+    }),
+    { ok: true },
+  );
+  assert.equal(
+    oauth.validateAuthorizeParams({
+      ...authorizeParams(),
+      resource: "https://tunnel.example.test/v1/mcp/tunnel-1/",
+    }).ok,
+    false,
+  );
 });
 
 test("validateAuthorizeParams rejects client, redirect, PKCE, resource and response type mismatches", async (t) => {
@@ -93,14 +109,16 @@ test("authorization code exchange validates PKCE and consumes the code even on f
   assert.equal(replay, null);
 });
 
-test("successful code exchange issues an access token and refresh token", async (t) => {
+test("successful alias code exchange issues resource-bound tokens accepted by bearer validation", async (t) => {
   const { store, dir } = await makeStore();
   t.after(async () => {
     await store.persist();
     await rm(dir, { recursive: true, force: true });
   });
-  const oauth = new OAuthService(makeConfig(), store);
+  const alias = "https://tunnel.example.test/v1/mcp/tunnel-1";
+  const oauth = new OAuthService(makeConfig({ resourceAliases: [alias] }), store);
   const params = authorizeParams("correct-verifier");
+  params.resource = alias;
   const code = oauth.issueAuthorizationCode(params);
 
   const pair = oauth.exchangeAuthorizationCode({
@@ -115,6 +133,36 @@ test("successful code exchange issues an access token and refresh token", async 
   assert.equal(pair.expiresIn, 3600);
   assert.equal(oauth.validateAccessToken(pair.accessToken), true);
   assert.equal(store.getRefreshToken(pair.refreshToken)?.resource, params.resource);
+
+  const refreshed = oauth.refreshAccessToken(pair.refreshToken, alias);
+  assert.ok(refreshed);
+  assert.equal(oauth.validateAccessToken(refreshed.accessToken), true);
+});
+
+test("resource alias removal blocks pending code exchange and existing refresh tokens", async (t) => {
+  const { store, dir } = await makeStore();
+  t.after(async () => {
+    await store.persist();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const alias = "https://tunnel.example.test/v1/mcp/tunnel-1";
+  const configured = new OAuthService(makeConfig({ resourceAliases: [alias] }), store);
+  const params = authorizeParams("correct-verifier");
+  params.resource = alias;
+  const code = configured.issueAuthorizationCode(params);
+  store.setRefreshToken("alias-refresh", { resource: alias });
+  store.setAccessToken("alias-access", { resource: alias, expiresAt: Date.now() + 60_000 });
+
+  const revoked = new OAuthService(makeConfig(), store);
+  assert.equal(revoked.exchangeAuthorizationCode({
+    code,
+    redirectUri: params.redirectUri,
+    verifier: "correct-verifier",
+    resource: alias,
+  }), null);
+  assert.equal(revoked.refreshAccessToken("alias-refresh", alias), null);
+  assert.equal(store.getRefreshToken("alias-refresh"), undefined);
+  assert.equal(revoked.validateAccessToken("alias-access"), false);
 });
 
 test("refresh token rotates and cannot be replayed", async (t) => {
@@ -133,19 +181,22 @@ test("refresh token rotates and cannot be replayed", async (t) => {
   assert.equal(oauth.refreshAccessToken("old-refresh", "https://mcp.example.test"), null);
 });
 
-test("expired or wrong-resource access tokens are rejected and deleted", async (t) => {
+test("access tokens require a currently accepted resource and are deleted when invalid", async (t) => {
   const { store, dir } = await makeStore();
   t.after(async () => {
     await store.persist();
     await rm(dir, { recursive: true, force: true });
   });
-  const oauth = new OAuthService(makeConfig(), store);
+  const alias = "https://tunnel.example.test/v1/mcp/tunnel-1";
+  const oauth = new OAuthService(makeConfig({ resourceAliases: [alias] }), store);
 
   store.setAccessToken("expired", { resource: "https://mcp.example.test", expiresAt: Date.now() - 1 });
+  store.setAccessToken("alias", { resource: alias, expiresAt: Date.now() + 60_000 });
   store.setAccessToken("wrong-resource", { resource: "https://other.example", expiresAt: Date.now() + 60_000 });
 
   assert.equal(oauth.validateAccessToken("expired"), false);
   assert.equal(store.getAccessToken("expired"), undefined);
+  assert.equal(oauth.validateAccessToken("alias"), true);
   assert.equal(oauth.validateAccessToken("wrong-resource"), false);
   assert.equal(store.getAccessToken("wrong-resource"), undefined);
 });

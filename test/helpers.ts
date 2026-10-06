@@ -24,6 +24,7 @@ export function makeConfig(overrides: Partial<RemoteAppConfig["oauth"]> = {}): R
       adminPassword: "admin-password",
       redirectUri: "https://client.example.test/callback",
       redirectUriAllowlist: ["prefix:https://chatgpt.com/connector/oauth/"],
+      resourceAliases: [],
       ...overrides,
     },
     paths: {

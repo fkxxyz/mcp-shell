@@ -105,6 +105,20 @@ Process restart ends all MCP sessions while durable Shell state and OAuth access
 
 Control: clients must reinitialize MCP sessions after reconnect. Do not infer MCP session continuity from Shell or token continuity.
 
+## Connection Semantics Have a Broad Documentation Synchronization Radius
+
+- **Root cause:** connection-mode, tunnel, and OAuth resource semantics are intentionally projected into several architecture views and operator-facing documents, but the boundary between authoritative definition and derived explanation is not explicit enough to prevent the same rule from being restated independently.
+- **Primary cost dimension:** maintainability and maintained-knowledge coherence.
+- **Current cost:** a single conceptual change to tunnel placement and OAuth resource aliases required coordinated edits across architecture constraints, context, solution strategy, building blocks, deployment, access control, the connection-mode decision record, quality scenarios, glossary, README, and agent guidance. Each edit is individually reasonable, but future changes can leave contradictory current-state claims if one projection is missed.
+- **Evidence:** the 2026-10-06 resource-alias change changed one governing connection/authentication rule and required synchronized updates across multiple architecture Views plus README and AGENTS guidance.
+- **Cost mechanism:** several documents can read as independent authorities for whether tunnels imply local mode, when remote OAuth remains active, and what resource aliases mean; synchronization relies primarily on maintainer recall rather than a clearly documented authority/projection relationship.
+- **Reachable better state:** keep the distinct Views, but make authority boundaries explicit: the connection-mode ADR owns the mode decision and rationale, access-control owns security invariants, deployment owns topology, and other maintained documents summarize or reference those authorities without redefining the rule.
+- **Governing constraint:** each long-lived connection/authentication rule has one clear semantic authority; other Views may project consequences for their audience but should not become competing definitions.
+- **Scope discovery:** when connection or authentication semantics change, inspect the decision record, access-control concept, deployment view, architecture index/navigation, README/operator guidance, AGENTS guidance, glossary, constraints, quality scenarios, and any other current-state View that describes the same rule.
+- **Repair direction:** do not collapse the architecture documentation or introduce generated prose. Incrementally reduce duplicated normative wording when these documents are next touched, and add explicit cross-references where they lower synchronization burden without harming local readability.
+- **Exit criteria:** representative connection-policy changes can identify the authoritative rule first, derived Views have clear projection roles, and changing one rule no longer requires reconciling multiple apparently authoritative definitions.
+- **Priority:** low; the synchronization cost is now observable, but the current Views serve distinct audiences and a broad documentation rewrite would cost more than the present burden.
+
 ## Shell History Grows Monotonically
 
 Shell IDs are never reused and there is intentionally no list or close operation, so `shells.db` grows with created Shells.

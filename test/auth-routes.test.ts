@@ -7,8 +7,8 @@ import { createOAuthRouter } from "../src/auth/routes.js";
 import { OAuthService } from "../src/auth/oauth-service.js";
 import { makeConfig, makeStore, pkceChallenge } from "./helpers.js";
 
-async function startAuthApp() {
-  const config = makeConfig();
+async function startAuthApp(overrides: Parameters<typeof makeConfig>[0] = {}) {
+  const config = makeConfig(overrides);
   const { store, dir } = await makeStore();
   const oauth = new OAuthService(config, store);
   const app = express();
@@ -107,8 +107,9 @@ test("token endpoint rejects invalid client credentials", async (t) => {
   assert.deepEqual(await response.json(), { error: "invalid_client" });
 });
 
-test("authorization code flow works through HTTP and code replay fails", async (t) => {
-  const ctx = await startAuthApp();
+test("authorization code flow accepts a configured resource alias and code replay fails", async (t) => {
+  const alias = "https://tunnel.example.test/v1/mcp/tunnel-1";
+  const ctx = await startAuthApp({ resourceAliases: [alias] });
   t.after(() => ctx.close());
 
   const verifier = "http-verifier";
@@ -118,7 +119,7 @@ test("authorization code flow works through HTTP and code replay fails", async (
     redirect_uri: ctx.config.oauth.redirectUri,
     code_challenge: pkceChallenge(verifier),
     code_challenge_method: "S256",
-    resource: ctx.config.publicBaseUrl,
+    resource: alias,
     scope: "full",
     state: "state-123",
     password: ctx.config.oauth.adminPassword,
@@ -143,7 +144,7 @@ test("authorization code flow works through HTTP and code replay fails", async (
     code,
     redirect_uri: ctx.config.oauth.redirectUri,
     code_verifier: verifier,
-    resource: ctx.config.publicBaseUrl,
+    resource: alias,
   });
   const basic = Buffer.from(`${ctx.config.oauth.clientId}:${ctx.config.oauth.clientSecret}`).toString("base64");
   const tokenResponse = await fetch(`${ctx.baseUrl}/token`, {
@@ -160,6 +161,7 @@ test("authorization code flow works through HTTP and code replay fails", async (
   assert.equal(pair.scope, "full");
   assert.ok(pair.access_token);
   assert.ok(pair.refresh_token);
+  assert.equal(ctx.oauth.validateAccessToken(pair.access_token), true);
 
   const replayResponse = await fetch(`${ctx.baseUrl}/token`, {
     method: "POST",

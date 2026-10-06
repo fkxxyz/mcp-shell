@@ -39,7 +39,19 @@ The local no-OAuth profile is safe only under a stronger placement invariant: th
 
 ## Tunnel Rule
 
-A tunnel does not widen mcp-shell's local listener. It carries MCP traffic through an authenticated provider-controlled path to the loopback service. The tunnel service's identity model does not change the authority of mcp-shell tools once a request reaches the local endpoint.
+A tunnel changes reachability, not mcp-shell's connection-mode semantics. The common local-mode deployment carries MCP traffic through an authenticated provider-controlled path to the loopback service. A deployment that also needs mcp-shell OAuth for other callers may instead tunnel a remote-mode endpoint; bearer authentication then remains mandatory before MCP session handling.
+
+The tunnel service's identity model does not change the authority of mcp-shell tools once a request is admitted.
+
+## OAuth Resource Identity
+
+In remote mode, `PUBLIC_BASE_URL` is the primary OAuth protected-resource identifier. `OAUTH_RESOURCE_ALIASES` may add exact HTTPS identifiers that name the same logical protected resource, for example when a trusted ingress or tunnel presents a different canonical resource URL.
+
+Aliases are equivalent names for one mcp-shell authority, not separate authorization domains. A token bound to any configured alias is therefore accepted by this mcp-shell instance regardless of which network path delivered the request. Deployments that require ingress-specific audience isolation need a different authorization model.
+
+The same accepted-resource set is enforced when validating authorization requests, exchanging authorization codes, refreshing tokens, and validating bearer access tokens. Unconfigured identifiers are rejected. Removing an alias from configuration and restarting the process prevents persisted codes, refresh tokens, and access tokens bound to that alias from being accepted on subsequent validation.
+
+Resource aliases are configured explicitly rather than discovered from a tunnel provider. This keeps the trust decision operator-owned and avoids provider-specific coupling. Discovery metadata continues to advertise `PUBLIC_BASE_URL`; an intermediary may rewrite that resource identifier to a configured alias.
 
 ## Tool Annotations
 

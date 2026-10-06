@@ -38,7 +38,8 @@ Owns:
 - parsing the server env file;
 - optional shell-environment sourcing;
 - command-path construction;
-- validation of required server configuration; and
+- validation of required server configuration;
+- parsing exact HTTPS OAuth resource aliases for remote mode; and
 - optional `ACTIVITY_PASSWORD`, which enables the Basic-authenticated `/activity/*` surface when configured.
 
 `AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings. Shell roots are runtime data created through `create_shell`, not server configuration.
@@ -51,6 +52,7 @@ Owns:
 
 - OAuth discovery and authorization/token routes;
 - authorization parameter and PKCE validation;
+- one accepted-resource policy covering the primary public base URL plus configured aliases;
 - token issuance and refresh;
 - persisted authorization state;
 - bearer middleware and tool-log actor derivation.

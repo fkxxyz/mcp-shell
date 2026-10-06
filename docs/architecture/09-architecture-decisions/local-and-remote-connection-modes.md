@@ -65,9 +65,13 @@ The unsafe state to exclude is:
 
 If `BIND_HOST` and `AUTH_MODE` are independently configurable, the architecture makes that state representable and relies on defensive validation. A single mode captures the intended deployment invariants directly and keeps the configuration surface smaller.
 
-## Why Tunnel Reuses Local Mode
+## Why Tunnel Is Not a Third Mode
 
-A trusted outbound tunnel changes reachability, not mcp-shell semantics. Treating it as another server mode would couple mcp-shell to one tunnel provider and duplicate authentication concepts. The tunnel client can connect to `127.0.0.1:<PORT>/mcp` while preserving the local listener boundary.
+A trusted outbound tunnel changes reachability, not mcp-shell semantics. Treating it as another server mode would couple mcp-shell to one tunnel provider and duplicate authentication concepts.
+
+The common personal-host path tunnels `local` mode so the tunnel client can connect to `127.0.0.1:<PORT>/mcp` while preserving the loopback boundary. If one mcp-shell instance must also serve other network clients behind its own OAuth boundary, the tunnel may target `remote` mode instead. In that case the built-in OAuth flow remains authoritative.
+
+An intermediary may present a canonical OAuth resource identifier different from `PUBLIC_BASE_URL`. Remote mode therefore supports explicit `OAUTH_RESOURCE_ALIASES` as equivalent identifiers for the same protected resource. This is configuration of the existing OAuth boundary, not a new mode or tunnel-provider integration.
 
 ## Alternatives Rejected
 
@@ -93,9 +97,10 @@ Rejected because they broaden configuration beyond the observed need and permit 
 - `src/http/app.ts` must compose OAuth only for remote mode.
 - `src/main.ts` must choose loopback or all-interface binding from mode.
 - Existing MCP session and tool modules should not change.
+- Remote OAuth may accept explicitly configured equivalent resource identifiers without weakening resource binding.
 - Tests must prove the local loopback/no-auth invariant and remote backward compatibility.
 - Documentation and README must stop presenting public HTTPS as a universal requirement once implementation converges.
 
 ## Reassessment
 
-Reassess if local clients require stronger per-user isolation, if mcp-shell becomes multi-user/multi-tenant, if a tunnel provider requires application-layer authentication at the local endpoint, or if additional deployment profiles cannot be expressed without weakening the mode invariants.
+Reassess if local clients require stronger per-user isolation, if mcp-shell becomes multi-user/multi-tenant, if equivalent resource aliases are insufficient because callers need ingress-specific audience isolation, or if additional deployment profiles cannot be expressed without weakening the mode invariants.
