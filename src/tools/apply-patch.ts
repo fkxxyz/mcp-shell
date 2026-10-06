@@ -7,6 +7,7 @@ import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
+import type { InvocationGate } from "./invocation-gate.js";
 import { shellIdSchema } from "./shell.js";
 
 const DESCRIPTION = `Use the \`apply_patch\` tool to edit files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
@@ -568,6 +569,7 @@ async function applyChanges(fileChanges: FileChange[]): Promise<void> {
 
 export function registerApplyPatchTool(
 	server: McpServer,
+	invocations: InvocationGate,
 	shells: ShellStore,
 	recorder: ToolCallRecorder,
 	mutations: FileMutationCoordinator,
@@ -598,7 +600,7 @@ export function registerApplyPatchTool(
 			})),
 			diagnostics: z.record(z.string(), z.unknown()),
 		},
-	}, async (input, extra) => invokeShellTool(recorder, shells, "apply_patch", input, async (shell) => {
+	}, async (input, extra) => invokeShellTool(invocations, recorder, shells, "apply_patch", input, async (shell) => {
 		const { patchText } = input;
 		const cwd = shell.cwd;
 		const signal = extra.signal;

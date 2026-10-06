@@ -7,12 +7,16 @@ import type { ProcessSupervisor } from "../host/process-supervisor.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import type { SkillCatalog } from "../skills.js";
+import type { InvocationGate } from "../tools/invocation-gate.js";
 import { createMcpServer } from "./server.js";
 
 export class McpSessionManager {
   private readonly transports = new Map<string, StreamableHTTPServerTransport>();
+  private closing = false;
+  private closePromise: Promise<void> | undefined;
 
   constructor(
+    private readonly invocations: InvocationGate,
     private readonly shells: ShellStore,
     private readonly recorder: ToolCallRecorder,
     private readonly commandPath: CommandPathPolicy,
@@ -31,12 +35,17 @@ export class McpSessionManager {
   ): Promise<StreamableHTTPServerTransport | undefined> {
     const existing = this.get(sessionId);
     if (existing) return existing;
+    if (this.closing) return undefined;
     if (sessionId || !isInitializeRequest(body)) return undefined;
 
     let transport: StreamableHTTPServerTransport;
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => {
+      onsessioninitialized: async (id) => {
+        if (this.closing) {
+          await transport.close();
+          return;
+        }
         this.transports.set(id, transport);
       },
     });
@@ -47,6 +56,7 @@ export class McpSessionManager {
     };
 
     const server = createMcpServer(
+      this.invocations,
       this.shells,
       this.recorder,
       this.commandPath,
@@ -55,12 +65,34 @@ export class McpSessionManager {
       this.processes,
     );
     await server.connect(transport);
+    if (this.closing) {
+      await transport.close();
+      return undefined;
+    }
     return transport;
   }
 
-  async closeAll(): Promise<void> {
-    const transports = [...this.transports.values()];
-    this.transports.clear();
-    await Promise.allSettled(transports.map((transport) => transport.close()));
+  stopAccepting(): void {
+    this.closing = true;
+  }
+
+  closeStandaloneStreams(): void {
+    for (const transport of this.transports.values()) {
+      transport.closeStandaloneSSEStream();
+    }
+  }
+
+  close(): Promise<void> {
+    this.stopAccepting();
+    this.closePromise ??= this.closeTransports();
+    return this.closePromise;
+  }
+
+  private async closeTransports(): Promise<void> {
+    while (this.transports.size > 0) {
+      const transports = [...this.transports.values()];
+      this.transports.clear();
+      await Promise.allSettled(transports.map((transport) => transport.close()));
+    }
   }
 }

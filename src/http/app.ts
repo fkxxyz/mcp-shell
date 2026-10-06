@@ -14,6 +14,9 @@ import { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import { ToolLogStore } from "../observability/tool-log-store.js";
 import { ShellStore } from "../shell-store.js";
 import { SkillCatalog } from "../skills.js";
+import { DrainGate } from "../runtime/drain-gate.js";
+import { InvocationGate } from "../tools/invocation-gate.js";
+import { closeLspServers } from "../tools/lsp.js";
 import {
   createActivityApiRouter,
 } from "./activity-routes.js";
@@ -31,6 +34,7 @@ export type AppRuntime = {
 };
 
 const MAX_ACTIVITY_HISTORY_CALLS = 10_000;
+const TOOL_SHUTDOWN_GRACE_MS = 3_000;
 
 export type AppDependencies = {
   skills?: SkillCatalog;
@@ -39,7 +43,11 @@ export type AppDependencies = {
 
 export async function createApp(config: AppConfig, dependencies: AppDependencies = {}): Promise<AppRuntime> {
   const app = express();
+  const requests = new DrainGate();
+  const invocations = new InvocationGate();
+
   app.disable("x-powered-by");
+  app.use(createRequestAdmission(requests));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -63,6 +71,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   const mutations = new FileMutationCoordinator();
   const processes = new ProcessSupervisor();
   const sessions = new McpSessionManager(
+    invocations,
     shells,
     recorder,
     config.commandPath,
@@ -86,43 +95,104 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
     app.use("/console", webConsoleSecurityHeaders, requireWebAuth, createWebUiRouter(webRoot));
   }
 
+  let authState: AuthStateStore | undefined;
+  let cleanupTimer: NodeJS.Timeout | undefined;
+
   if (config.mode === "local") {
     app.use("/mcp", createMcpRouter(sessions));
+  } else {
+    authState = new AuthStateStore(config.paths.configDir, config.paths.stateFile);
+    await authState.load();
+    const oauth = new OAuthService(config, authState);
 
-    return {
-      app,
-      async close() {
-        activity.close();
-        await sessions.closeAll();
-        await processes.close();
-        shells.close();
-      },
-    };
+    app.use(createOAuthRouter(config, oauth));
+    app.use("/mcp", createRequireBearer(config, oauth), createMcpRouter(sessions));
+
+    cleanupTimer = setInterval(() => {
+      if (authState?.cleanupExpired()) authState.persistSoon();
+    }, 60_000);
+    cleanupTimer.unref();
   }
 
-  const authState = new AuthStateStore(config.paths.configDir, config.paths.stateFile);
-  await authState.load();
-  const oauth = new OAuthService(config, authState);
+  let closePromise: Promise<void> | undefined;
+  const finishClose = async () => {
+    const activeInvocations = invocations.activeCount;
+    if (activeInvocations > 0) {
+      console.log(
+        `Shutdown draining ${activeInvocations} active tool invocation(s) for up to ${TOOL_SHUTDOWN_GRACE_MS}ms`,
+      );
+    }
 
-  app.use(createOAuthRouter(config, oauth));
-  app.use("/mcp", createRequireBearer(config, oauth), createMcpRouter(sessions));
+    const drainedWithinGrace = activeInvocations === 0 || await settlesWithin(
+      invocations.drained(),
+      TOOL_SHUTDOWN_GRACE_MS,
+    );
+    if (!drainedWithinGrace) {
+      const interrupted = invocations.interruptCancellable();
+      console.warn(
+        `Shutdown tool grace period expired with ${invocations.activeCount} invocation(s) still active; ` +
+        `interrupting ${interrupted} cancellable invocation(s) and terminating managed processes`,
+      );
+    }
 
-  const cleanupTimer = setInterval(() => {
-    if (authState.cleanupExpired()) authState.persistSoon();
-  }, 60_000);
-  cleanupTimer.unref();
+    await Promise.all([
+      processes.close(),
+      closeLspServers(),
+    ]);
+    await invocations.drained();
+    await requests.drained();
+    await sessions.close();
+    if (authState) await authState.persist();
+    shells.close();
+  };
 
   return {
     app,
-    async close() {
-      clearInterval(cleanupTimer);
+    close() {
+      requests.close();
+      invocations.close();
+      sessions.stopAccepting();
       activity.close();
-      await sessions.closeAll();
-      await processes.close();
-      await authState.persist();
-      shells.close();
+      sessions.closeStandaloneStreams();
+      if (cleanupTimer) clearInterval(cleanupTimer);
+      closePromise ??= finishClose();
+      return closePromise;
     },
   };
+}
+
+function createRequestAdmission(gate: DrainGate) {
+  return (_req: Request, res: Response, next: NextFunction): void => {
+    const lease = gate.enter();
+    if (!lease) {
+      res.setHeader("Connection", "close");
+      res.status(503).json({
+        error: {
+          code: "server_shutting_down",
+          message: "Server is shutting down",
+        },
+      });
+      return;
+    }
+
+    res.once("finish", lease.release);
+    res.once("close", lease.release);
+    next();
+  };
+}
+
+async function settlesWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    void promise.then(() => finish(true));
+  });
 }
 
 function webApiSecurityHeaders(_req: Request, res: Response, next: NextFunction): void {

@@ -25,6 +25,7 @@ import type { FileMutationCoordinator } from "../host/file-mutation-coordinator.
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
+import type { InvocationGate } from "./invocation-gate.js";
 import { shellIdSchema } from "./shell.js";
 
 const DEFAULT_MAX_REFERENCES = 200
@@ -1470,52 +1471,31 @@ type ManagedClient = {
 }
 
 class LSPServerManager {
-  private static instance: LSPServerManager
+  private static instance: LSPServerManager | undefined
+  private static closing = false
   private clients = new Map<string, ManagedClient>()
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
+  private closePromise: Promise<void> | undefined
   private readonly IDLE_TIMEOUT = 5 * 60 * 1000
   private readonly INIT_TIMEOUT = 60 * 1000
 
   private constructor() {
     this.startCleanupTimer()
-    this.registerProcessCleanup()
   }
 
   static getInstance(): LSPServerManager {
+    if (LSPServerManager.closing) throw new Error("LSP server manager is closing")
     if (!LSPServerManager.instance) {
       LSPServerManager.instance = new LSPServerManager()
     }
     return LSPServerManager.instance
   }
 
-  private registerProcessCleanup(): void {
-    const syncCleanup = () => {
-      for (const [, managed] of this.clients) {
-        void managed.client.stop().catch(() => {})
-      }
-      this.clients.clear()
-      if (this.cleanupInterval) {
-        clearInterval(this.cleanupInterval)
-        this.cleanupInterval = null
-      }
-    }
-
-    const asyncCleanup = () => {
-      void Promise.allSettled([...this.clients.values()].map((managed) => managed.client.stop().catch(() => {}))).finally(() => {
-        this.clients.clear()
-        if (this.cleanupInterval) {
-          clearInterval(this.cleanupInterval)
-          this.cleanupInterval = null
-        }
-      })
-    }
-
-    process.on("exit", syncCleanup)
-    process.on("SIGINT", asyncCleanup)
-    process.on("SIGTERM", asyncCleanup)
-    if (process.platform === "win32") {
-      process.on("SIGBREAK", asyncCleanup)
-    }
+  static async closeInstance(): Promise<void> {
+    LSPServerManager.closing = true
+    const instance = LSPServerManager.instance
+    if (!instance) return
+    await instance.close()
   }
 
   private key(root: string, serverId: string): string {
@@ -1525,6 +1505,7 @@ class LSPServerManager {
   private startCleanupTimer(): void {
     if (this.cleanupInterval) return
     this.cleanupInterval = setInterval(() => this.cleanupIdleClients(), 60_000)
+    this.cleanupInterval.unref()
   }
 
   private cleanupIdleClients(): void {
@@ -1538,6 +1519,8 @@ class LSPServerManager {
   }
 
   async getClient(root: string, server: ResolvedServer, commandPath: CommandPathPolicy): Promise<LSPClient> {
+    if (this.closePromise) throw new Error("LSP server manager is closing")
+
     const key = this.key(root, server.id)
     let managed = this.clients.get(key)
 
@@ -1604,6 +1587,12 @@ class LSPServerManager {
       throw error
     }
 
+    if (this.closePromise) {
+      this.clients.delete(key)
+      await client.stop().catch(() => {})
+      throw new Error("LSP server manager is closing")
+    }
+
     const current = this.clients.get(key)
     if (current) {
       current.initPromise = undefined
@@ -1625,10 +1614,30 @@ class LSPServerManager {
   isServerInitializing(root: string, serverId: string): boolean {
     return this.clients.get(this.key(root, serverId))?.isInitializing ?? false
   }
+
+  close(): Promise<void> {
+    this.closePromise ??= this.closeClients()
+    return this.closePromise
+  }
+
+  private async closeClients(): Promise<void> {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval)
+      this.cleanupInterval = null
+    }
+
+    const clients = [...this.clients.values()].map((managed) => managed.client)
+    this.clients.clear()
+    await Promise.allSettled(clients.map((client) => client.stop()))
+  }
 }
 
 function getLspManager(): LSPServerManager {
   return LSPServerManager.getInstance()
+}
+
+export function closeLspServers(): Promise<void> {
+  return LSPServerManager.closeInstance()
 }
 
 async function withLspClient<T>(
@@ -1994,6 +2003,7 @@ function errorText(error: unknown): ToolTextResult {
 
 export function registerLspTools(
   server: McpServer,
+  invocations: InvocationGate,
   shells: ShellStore,
   recorder: ToolCallRecorder,
   commandPath: CommandPathPolicy,
@@ -2043,7 +2053,7 @@ export function registerLspTools(
         annotations: config.name === "lsp_rename"
           ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
           : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      }, async (params, extra) => invokeShellTool(recorder, shells, config.name, params, async (shell) => {
+      }, async (params, extra) => invokeShellTool(invocations, recorder, shells, config.name, params, async (shell) => {
         const { shell_id: _shellId, ...toolParams } = params;
         const result = await config.execute("mcp", toolParams, extra.signal, undefined, { cwd: shell.cwd });
         const text = result.content
@@ -2057,7 +2067,7 @@ export function registerLspTools(
             details: result.details ?? {},
           },
         };
-      }));
+      }, { shutdownCancellable: config.name !== "lsp_rename" }));
     },
   };
 

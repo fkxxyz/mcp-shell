@@ -8,6 +8,7 @@ import type { ProcessSupervisor } from "../host/process-supervisor.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
+import type { InvocationGate } from "./invocation-gate.js";
 import { shellIdSchema } from "./shell.js";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
@@ -218,6 +219,7 @@ export async function readImage(
 
 export function registerReadImageTool(
   server: McpServer,
+  invocations: InvocationGate,
   shells: ShellStore,
   recorder: ToolCallRecorder,
   commandPath: CommandPathPolicy,
@@ -239,7 +241,7 @@ export function registerReadImageTool(
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async (input, extra) => invokeShellTool(recorder, shells, "read_image", input, (shell) =>
+  }, async (input, extra) => invokeShellTool(invocations, recorder, shells, "read_image", input, (shell) =>
     readImage(shell.cwd, input.path, extra.signal, commandPath, processes)
-  ));
+  , { shutdownCancellable: true }));
 }

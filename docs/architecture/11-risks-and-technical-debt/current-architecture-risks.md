@@ -113,19 +113,19 @@ Control: treat the reachable skill tree as operator-managed configuration and ke
 - **Exit criteria:** either evidence establishes that complete-body scan cost is immaterial across the supported operating range, or discovery no longer reads unrelated complete bodies and `skill` loads the full body only for the resolved winner while all current semantics remain covered.
 - **Priority:** low; the scaling mechanism is credible and avoidable, but current materiality is unmeasured and an eager optimization would add parser/I/O complexity.
 
-## Structured Multi-File Mutations Are Not Failure-Atomic
+## Structured Mutations Are Not Failure- or Crash-Atomic
 
-- **Root cause:** multi-file mutation paths plan or receive a set of changes, then apply filesystem operations sequentially without a commit/rollback boundary.
+- **Root cause:** structured mutation paths write directly to their target filesystem state without a general staging/commit boundary; multi-file paths additionally apply filesystem operations sequentially without rollback.
 - **Primary cost dimension:** correctness and recovery.
-- **Current cost:** `apply_patch` and LSP rename can report failure after earlier files in the same logical operation were already modified. Callers must treat a failed multi-file mutation as potentially partially applied and may need manual inspection or recovery.
-- **Evidence:** `apply_patch` plans all requested changes but applies writes, moves, and deletes one-by-one; LSP workspace edits likewise process file edits/create/rename/delete operations sequentially and explicitly retain the list of files modified before a later failure.
-- **Cost mechanism:** validation reduces pre-apply errors, and `FileMutationCoordinator` now prevents competing in-process structured mutations during the critical section, but neither mechanism can undo a filesystem failure that occurs after earlier mutations have committed.
-- **Reachable better state:** define an explicit failure-atomicity contract for structured multi-file mutations, then implement the smallest staging/commit/rollback mechanism that satisfies it for supported write, create, delete, and move semantics. The design may deliberately document bounded non-atomic cases where host-filesystem guarantees make full rollback unsafe or impossible.
-- **Governing constraint:** a multi-file structured mutation must either complete according to its declared commit semantics or return enough explicit state for deterministic recovery; a generic failure must not falsely imply that no changes occurred.
-- **Scope discovery:** include `apply_patch`, LSP workspace edits and rename, shared mutation coordination, file creation/deletion/move semantics, symlinks, permissions, cross-filesystem moves, interruption/crash behavior, tool results, logs, and contract tests before selecting a transaction model.
+- **Current cost:** `apply_patch` and LSP rename can report failure after earlier files in the same logical operation were already modified. Direct target writes can also be interrupted by process crash or the service manager's final hard stop, so even a mutation deliberately allowed to finish during graceful shutdown is not guaranteed to survive an eventual `SIGKILL` as an all-or-nothing update. Callers may need manual inspection or recovery.
+- **Evidence:** `apply_patch` plans all requested changes but applies writes, moves, and deletes one-by-one; LSP workspace edits likewise process file edits/create/rename/delete operations sequentially. The shutdown contract intentionally protects admitted mutation critical sections from application-level cancellation, but systemd still retains a finite final hard-stop deadline.
+- **Cost mechanism:** validation reduces pre-apply errors, and `FileMutationCoordinator` prevents competing in-process structured mutations during the critical section, but neither mechanism provides a crash-safe commit point or can undo filesystem work that committed before a later failure/interruption.
+- **Reachable better state:** define an explicit failure/crash-atomicity contract for structured mutations, then implement the smallest staging/commit/rollback mechanism that satisfies it for supported write, create, delete, and move semantics. The design may deliberately document bounded non-atomic cases where host-filesystem guarantees make full rollback unsafe or impossible.
+- **Governing constraint:** a structured mutation must either complete according to its declared commit semantics or return/leave enough explicit state for deterministic recovery; a generic failure or hard interruption must not create an undocumented partial-commit state.
+- **Scope discovery:** include `write`, `edit`, `apply_patch`, LSP workspace edits and rename, shared mutation coordination, file creation/deletion/move semantics, symlinks, permissions, cross-filesystem moves, graceful shutdown versus hard-stop behavior, tool results, logs, and contract tests before selecting a transaction model.
 - **Repair direction:** design the failure model first. Do not bolt temporary backups or rename-based pseudo-transactions onto individual tools without proving their behavior across the full mutation scope.
-- **Exit criteria:** supported multi-file mutation paths have one explicit commit/failure contract, tests cover failure after partial progress, tool results unambiguously describe residual state, and any staged rollback mechanism is validated for the filesystem operations it claims to cover.
-- **Priority:** medium; partial application is a real correctness/recovery risk, but repair crosses several filesystem semantics and is not appropriate as incidental cleanup during host-tool dependency replacement.
+- **Exit criteria:** supported structured mutation paths have one explicit commit/failure/crash contract, tests cover interruption and failure after partial progress, tool results unambiguously describe residual state, and any staging/rollback mechanism is validated for the filesystem operations it claims to cover.
+- **Priority:** medium; partial application and hard-interruption states are real correctness/recovery risks, but repair crosses several filesystem semantics and is not appropriate as incidental shutdown cleanup.
 
 ## MCP Session State Is Ephemeral
 
@@ -160,6 +160,62 @@ Control: clients must reinitialize MCP sessions after reconnect. Do not infer MC
 - **Repair direction:** design the smallest release-directory or atomic symlink/rename workflow that preserves the single-process deployment; do not introduce a separate frontend deployment system.
 - **Exit criteria:** interrupted/failed builds cannot alter the currently served release, successful deployment switches all server/Web artifacts as one unit, and rollback to the immediately previous release is explicit and bounded.
 - **Priority:** medium; failure probability is lower than day-to-day development costs, but the mismatch is now structural and affects every future production deployment.
+
+## Production Service Lifecycle Contract Is Not Repository-Owned
+
+- **Root cause:** the production user-level systemd unit is maintained outside the repository while application correctness now depends on specific service-manager semantics for initial stop signaling, final cgroup kill, timeout, and eventual readiness interpretation.
+- **Primary cost dimension:** operability and deployment correctness.
+- **Current cost:** a code or architecture change can require a matching manual edit under `~/.config/systemd/user/`; repository verification cannot detect a missing or stale edit. The current shutdown contract requires `KillMode=mixed` so active tool descendants receive the application's three-second completion opportunity, yet the service-manager default is `control-group`. Separately, `Type=simple` means a successful start/restart transition does not itself prove the MCP listener is ready.
+- **Evidence:** the 2026-10-06 shutdown repair required discovering the live unit manually and found that its effective default kill mode would bypass the newly required tool grace period. No canonical unit/template or installation path exists in the repository, and `npm run verify` cannot validate the live service definition.
+- **Cost mechanism:** source/runtime lifecycle policy and supervisor policy are two authorities joined only by operator memory. Machine rebuilds, service edits, and future lifecycle changes can silently reintroduce an incompatible signal/readiness contract.
+- **Reachable better state:** keep one canonical production service definition or generated/installable template in the repository, provide a bounded install/update path, and mechanically verify the lifecycle fields whose semantics are required by the application. Decide readiness semantics explicitly; if restart completion must mean application readiness, add the smallest appropriate readiness protocol rather than relying on `Type=simple` process creation.
+- **Governing constraint:** every production service-manager setting required for correctness has one versioned repository authority and an executable verification path; the deployed unit must not silently rely on incompatible defaults.
+- **Scope discovery:** include systemd unit/drop-ins, `ExecStart`/working directory, kill mode and stop timeout, restart policy, readiness semantics, deployment/restart instructions, service installation/update procedure, and any future non-systemd deployment profile before selecting the authority mechanism.
+- **Repair direction:** version the smallest service lifecycle artifact needed for the existing single-process deployment. Do not build a general deployment framework merely to eliminate one manual unit file.
+- **Exit criteria:** a fresh machine can install the intended service contract from repository-owned artifacts, CI or an installation check rejects incorrect required lifecycle settings, production restart behavior preserves the three-second tool grace and final cgroup hard stop, and readiness semantics are explicit rather than accidental.
+- **Priority:** high; shutdown correctness now materially depends on a setting outside repository control, and one incompatible default has already been observed in the active deployment.
+
+## Host Process-Tree Lifecycle Is Split Across Tool Runtimes
+
+- **Root cause:** application-owned external processes do not share one complete process-tree lifecycle primitive. Bash/image subprocesses use `ProcessSupervisor`, while LSP clients own a separate process wrapper and protocol-aware stop path; platform-specific tree termination semantics therefore remain distributed.
+- **Primary cost dimension:** reliability and maintainability.
+- **Current cost:** changes to TERM/KILL escalation, descendant cleanup, platform behavior, or process ownership require reasoning across more than one implementation. Unix process groups can be converged even after their leader exits, but Windows tree-wide graceful termination has different capabilities and the LSP path can evolve independently from generic host-process policy.
+- **Evidence:** the shutdown repair had to add process-group liveness tracking to `ProcessSupervisor` and separately remove process-signal ownership from the LSP manager. A regression test was required specifically for a TERM-ignoring descendant that survives after its group leader exits.
+- **Cost mechanism:** protocol lifecycle and OS process-tree lifecycle are partially entangled. Each runtime can independently reimplement spawn/stop/escalation details, creating divergence and repeated edge-case work without gaining product capability.
+- **Reachable better state:** keep LSP protocol/session semantics in the LSP layer but converge shared spawn/process-tree termination behavior behind the narrowest host-process primitive that can support both short-lived tools and long-lived protocol children. Explicitly define platform guarantees where Unix process groups and Windows process trees cannot offer identical semantics.
+- **Governing constraint:** every application-owned child tree has one explicit owner and one bounded termination policy; protocol-specific cleanup may precede that policy but must not create a competing OS-process lifecycle authority.
+- **Scope discovery:** include `ProcessSupervisor`, Bash, image normalization, LSP spawning/stopping, process groups, Windows `taskkill`, client abort/timeout behavior, application shutdown escalation, service-manager cgroup cleanup, and related tests.
+- **Repair direction:** first extract or extend only the shared process-tree mechanics demonstrated by current implementations. Do not force LSP protocol state into a generic supervisor or introduce a cross-platform abstraction that claims guarantees the host OS cannot provide.
+- **Exit criteria:** all application-owned child trees use one declared process-tree termination mechanism or explicitly documented platform-specific adapter, TERM/KILL/tree semantics have canonical tests, and adding a new child-process-backed tool does not require inventing another shutdown policy.
+- **Priority:** medium; Unix shutdown is now covered, but duplicated lifecycle authority remains and platform divergence can recreate the same class of defect.
+
+## LSP Runtime Has Process-Global Mixed Responsibility
+
+- **Root cause:** the LSP implementation combines configuration discovery, JSON-RPC/client transport, process ownership, idle lifecycle, workspace-edit application, formatting, and MCP registration in one large module, while its manager is process-global rather than owned by the `AppRuntime` composition boundary.
+- **Primary cost dimension:** maintainability and context locality.
+- **Current cost:** a local lifecycle change requires loading and editing a large amount of unrelated LSP logic, and tests/composition that create and close application runtimes must account for process-global manager state. Small ownership changes therefore carry a larger reasoning and regression surface than their semantics require.
+- **Evidence:** `src/tools/lsp.ts` is a multi-thousand-line directly maintained module. The shutdown repair touched its static manager, idle timer, client creation, process cleanup, explicit close path, and MCP registration even though the intended conceptual change was only signal/lifecycle ownership.
+- **Cost mechanism:** unrelated change axes share one file and one global lifetime. Process lifetime is used as an implicit substitute for dependency ownership, increasing context load and making safe deletion/refactoring harder.
+- **Reachable better state:** make the LSP manager an explicit application-owned dependency and split only along demonstrated responsibility/change boundaries such as process/client lifecycle, server/config discovery, workspace-edit application, and MCP presentation/registration.
+- **Governing constraint:** LSP resources have the same explicit runtime owner as other application resources, and a representative change should require loading only the responsibility it affects rather than the full LSP implementation.
+- **Scope discovery:** include LSP manager construction/closure, client/process lifecycle, server configuration/discovery, workspace-root logic, diagnostics aggregation, workspace edits, MCP registration, tests, and all callers before moving ownership or splitting modules.
+- **Repair direction:** move ownership first, then split along observed change seams only when each extraction reduces context burden. Do not perform a line-count-driven rewrite or change LSP behavior while reorganizing it.
+- **Exit criteria:** `AppRuntime` explicitly owns LSP lifecycle, no process-global singleton state is required for normal operation, and representative lifecycle/config/workspace-edit changes have bounded module context with unchanged tool contracts.
+- **Priority:** medium; the shutdown work demonstrated real context and ownership cost, but a broad LSP refactor is riskier than the localized lifecycle repair just completed.
+
+## Standalone Shutdown Has No Self-Owned Hard Deadline
+
+- **Root cause:** application shutdown has graceful admission/drain/escalation phases but delegates the final non-convergence bound entirely to an external service manager.
+- **Primary cost dimension:** operability and recovery.
+- **Current cost:** the recommended systemd deployment eventually kills a stuck process, but direct `npm start`/manual execution has no equivalent final deadline. A permanently stuck admitted request, in-process operation, or third-party promise can therefore prevent process exit indefinitely outside the supervised deployment.
+- **Evidence:** the shutdown design intentionally relies on `TimeoutStopSec` as the final whole-cgroup bound after the application's normal three-second tool grace and process escalation. No application-level final deadline covers the unsupported-but-common direct-run path.
+- **Cost mechanism:** graceful shutdown assumes every in-process await eventually settles. When that assumption fails, only deployments with a correctly configured external supervisor recover automatically.
+- **Reachable better state:** add one simple process-level maximum shutdown duration that emits a diagnostic and terminates non-converged standalone execution, while preserving systemd as the outer production cgroup authority. Avoid introducing phase-manager machinery unless future evidence requires it.
+- **Governing constraint:** every supported way of running mcp-shell has a finite shutdown bound; production supervision may enforce a stricter outer bound, but direct execution must not wait forever.
+- **Scope discovery:** include `src/main.ts`, HTTP close/drain behavior, invocation draining, LSP/process shutdown, durable-state flush ordering, CLI/manual execution, tests, and interaction with systemd's outer timeout.
+- **Repair direction:** implement one final deadline at the composition root with minimal policy. Do not make individual resources invent their own unrelated hard deadlines.
+- **Exit criteria:** an intentionally non-settling shutdown resource cannot keep a directly launched process alive indefinitely, the failure is diagnosed, normal graceful shutdown behavior remains unchanged, and systemd retains final production cgroup control.
+- **Priority:** low; supervised production already has a hard bound, so the residual cost is limited to direct/incorrectly supervised execution.
 
 ## Shell History Grows Monotonically
 

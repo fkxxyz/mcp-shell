@@ -2,8 +2,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { SkillCatalog } from "../skills.js";
+import type { InvocationGate } from "./invocation-gate.js";
 
-export function registerSkillTool(server: McpServer, recorder: ToolCallRecorder, skills: SkillCatalog) {
+export function registerSkillTool(
+  server: McpServer,
+  invocations: InvocationGate,
+  recorder: ToolCallRecorder,
+  skills: SkillCatalog,
+) {
   return server.registerTool("skill", {
     title: "Load Skill",
     description: "Load the current instructions for an available skill by its exact name.",
@@ -22,7 +28,7 @@ export function registerSkillTool(server: McpServer, recorder: ToolCallRecorder,
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async (input) => recorder.run({ tool: "skill", input }, async () => {
+  }, async (input) => invocations.run(() => recorder.run({ tool: "skill", input }, async () => {
     const skill = await skills.load(input.name);
     if (!skill) throw new Error(`Skill not found: ${input.name}`);
 
@@ -33,5 +39,5 @@ export function registerSkillTool(server: McpServer, recorder: ToolCallRecorder,
       }],
       structuredContent: skill,
     };
-  }));
+  })));
 }

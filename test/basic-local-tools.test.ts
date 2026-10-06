@@ -184,15 +184,53 @@ test("bash timeout and supervisor shutdown terminate managed process groups", as
     }
 
     const supervised = new ProcessSupervisor();
-    const running = runBash(
-      dir,
-      { command: 'printf "%s" "$$" > shell.pid; sleep 30' },
-      commandPath,
-      supervised,
+    const running = assert.rejects(
+      runBash(
+        dir,
+        { command: 'printf "%s" "$$" > shell.pid; sleep 30' },
+        commandPath,
+        supervised,
+      ),
+      /terminated by signal/,
     );
     await waitForFile(join(dir, "shell.pid"));
     await supervised.close();
-    await assert.rejects(running, /terminated by signal/);
+    await running;
+  });
+});
+
+test("supervisor kills surviving process-group descendants after the leader exits on TERM", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withTempDir(async (dir) => {
+    const commandPath = {
+      userBinDir: join(dir, "user-bin"),
+      repoBinDir: join(dir, "repo-bin"),
+    };
+    await mkdir(commandPath.userBinDir);
+    await mkdir(commandPath.repoBinDir);
+
+    const supervised = new ProcessSupervisor();
+    const running = runBash(
+      dir,
+      {
+        command:
+          "(trap '' TERM; printf '%s' \"$BASHPID\" > grandchild.pid; while :; do sleep 1; done) " +
+          "</dev/null >/dev/null 2>&1 & " +
+          "printf '%s' \"$$\" > shell.pid; trap 'exit 0' TERM; while :; do sleep 1; done",
+      },
+      commandPath,
+      supervised,
+    );
+
+    await waitForFile(join(dir, "shell.pid"));
+    await waitForFile(join(dir, "grandchild.pid"));
+    const grandchildPid = Number(await readFile(join(dir, "grandchild.pid"), "utf8"));
+    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0);
+
+    await supervised.close();
+    await running;
+    await waitForPidToDisappear(grandchildPid);
   });
 });
 
@@ -220,4 +258,17 @@ async function waitForFile(path: string): Promise<void> {
     }
   }
   throw new Error(`Timed out waiting for ${path}`);
+}
+
+async function waitForPidToDisappear(pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      process.kill(pid, 0);
+    } catch (error: any) {
+      if (error?.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Process ${pid} remained alive after supervisor shutdown`);
 }

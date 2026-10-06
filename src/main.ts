@@ -1,3 +1,4 @@
+import type { Server } from "node:http";
 import { listenHostForMode, loadConfig } from "./config.js";
 import { createApp } from "./http/app.js";
 
@@ -34,16 +35,34 @@ async function main(): Promise<void> {
   });
 
   let shuttingDown = false;
-  const shutdown = async () => {
+  const shutdown = async (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    server.close();
-    await runtime.close();
+    const startedAt = Date.now();
+    console.log(`Shutdown started: signal=${signal}`);
+
+    const runtimeClose = runtime.close();
+    const serverClose = closeServer(server);
+    try {
+      await runtimeClose;
+      server.closeIdleConnections();
+      await serverClose;
+      console.log(`Shutdown completed: duration=${Date.now() - startedAt}ms`);
+    } catch (error) {
+      console.error("Shutdown failed:", error);
+      process.exitCode = 1;
+    }
   };
 
-  process.once("SIGINT", () => void shutdown());
-  process.once("SIGTERM", () => void shutdown());
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
 }
 
 main().catch((error) => {

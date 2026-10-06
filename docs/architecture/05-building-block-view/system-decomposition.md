@@ -26,7 +26,7 @@ facets:
 
 ## Composition Root
 
-`mcp-shell.ts` delegates to `src/main.ts`. `src/main.ts` loads configuration, constructs the HTTP application, chooses the listener, and coordinates process shutdown.
+`mcp-shell.ts` delegates to `src/main.ts`. `src/main.ts` loads configuration, constructs the HTTP application, chooses the listener, and is the sole process-signal owner. It waits for both application cleanup and HTTP-server close during shutdown.
 
 The listener host is profile-dependent here rather than in the MCP implementation.
 
@@ -46,7 +46,7 @@ Owns:
 
 ## HTTP and Authorization (`src/http/`, `src/auth/`)
 
-`src/http/app.ts` composes Express middleware and protocol routers. It also owns the application runtime's `SkillCatalog`, creating the default global catalog once or accepting an injected catalog for isolated composition such as tests, then passing that same instance into MCP session construction.
+`src/http/app.ts` composes Express middleware and protocol routers. A process-wide request admission gate is installed before body parsing so shutdown can reject every new route uniformly while admitted requests remain drainable. The application runtime also owns the `SkillCatalog`, creating the default global catalog once or accepting an injected catalog for isolated composition such as tests, then passing that same instance into MCP session construction.
 
 `src/auth/` owns:
 
@@ -61,7 +61,7 @@ In the local profile, this block is not on the `/mcp` request path; in remote pr
 
 ## MCP Runtime (`src/mcp/`)
 
-`McpSessionManager` owns the in-process map from MCP session IDs to `StreamableHTTPServerTransport` instances. It creates one `McpServer` per newly initialized session, closes transports on shutdown, and rejects non-initialization requests that lack a valid session.
+`McpSessionManager` owns the in-process map from MCP session IDs to `StreamableHTTPServerTransport` instances. It creates one `McpServer` per newly initialized session, enters a non-reopenable closing state during shutdown, prevents late initialization from escaping transport cleanup, closes standalone SSE streams during quiescence, and closes all transports after admitted requests drain.
 
 `createMcpRouter` maps HTTP `POST`, `GET`, and `DELETE` at `/mcp` to the resolved transport and attaches tool-log context.
 
@@ -95,9 +95,9 @@ Tool registration is modular:
 
 Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root relative operations at that Shell's `cwd`. An unknown ID is rejected instead of falling back to process or server working directory. Tools do not decide network exposure or authorization.
 
-`src/tools/invoke.ts` is the shared Shell-aware invocation boundary. It centralizes Shell resolution plus tool-call recording so individual host-tool modules do not duplicate observability behavior.
+`src/tools/invocation-gate.ts` owns process-wide tool admission and active-invocation counting. `src/tools/invoke.ts` is the shared Shell-aware invocation boundary and enters that gate before Shell resolution or tool-call recording. `create_shell` and `skill`, which are not Shell-aware invocations, enter the same gate directly. Shutdown therefore has one tool-work boundary without making observability responsible for lifecycle correctness.
 
-`src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking, and `ProcessSupervisor` owns shutdown/abort cleanup for registered tool child processes. These services are application-owned and shared across MCP sessions.
+`src/runtime/drain-gate.ts` provides the narrow close-admission-and-drain primitive shared by HTTP and tool lifecycle boundaries. `src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking. `ProcessSupervisor` owns registered tool child processes; application shutdown gives active tools three seconds to finish naturally, then the supervisor sends process-group `SIGTERM`, waits one second, and escalates survivors to `SIGKILL`. These services are application-owned and shared across MCP sessions.
 
 ## Command Policy (`src/command-path.ts`, `bin/`)
 

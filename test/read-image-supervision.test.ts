@@ -85,17 +85,20 @@ sleep 30
     );
 
     const processes = new ProcessSupervisor();
-    const running = readImage(
-      dir,
-      sourcePath,
-      undefined,
-      { userBinDir, repoBinDir },
-      processes,
+    const running = assert.rejects(
+      readImage(
+        dir,
+        sourcePath,
+        undefined,
+        { userBinDir, repoBinDir },
+        processes,
+      ),
+      /Could not normalize image/,
     );
 
     await waitForFile(marker);
     await processes.close();
-    await assert.rejects(running, /Could not normalize image/);
+    await running;
   });
 });
 

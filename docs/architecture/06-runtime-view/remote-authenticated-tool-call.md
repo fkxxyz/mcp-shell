@@ -83,6 +83,6 @@ Logging persistence or activity-publication failure is reported but does not con
 
 ## Session End and Process Shutdown
 
-MCP transport close removes the session from the map. On SIGINT or SIGTERM, the HTTP server stops accepting work, all known transports are closed, remaining supervised tool child processes are terminated, and authorization state is persisted.
+MCP transport close removes the session from the map. Process shutdown follows the authority and ordering rules in `../08-cross-cutting-concepts/process-lifecycle.md`: new requests, session initialization, and tool invocations are closed first; admitted tools receive a three-second natural-completion window; remaining managed external processes are then terminated; admitted HTTP responses drain before MCP transports and shared stores are closed.
 
 A process restart invalidates active MCP sessions because the transport map is not durable. Persisted Shells remain addressable through their existing IDs after restart. Persisted OAuth tokens can remain valid until their own expiry or rotation rules invalidate them.

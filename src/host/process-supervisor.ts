@@ -5,6 +5,8 @@ type TrackedProcess = {
   processGroup: boolean;
 };
 
+const SHUTDOWN_TERM_GRACE_MS = 1_000;
+
 export class ProcessSupervisor {
   private readonly tracked = new Map<ChildProcess, TrackedProcess>();
   private closePromise: Promise<void> | undefined;
@@ -16,7 +18,7 @@ export class ProcessSupervisor {
     };
 
     if (this.closePromise) {
-      terminate(entry);
+      signalProcess(entry, "SIGKILL");
       throw new Error("Process supervisor is closing");
     }
 
@@ -32,7 +34,7 @@ export class ProcessSupervisor {
   }
 
   terminate(child: ChildProcess): void {
-    terminate(this.tracked.get(child) ?? { child, processGroup: false });
+    signalProcess(this.tracked.get(child) ?? { child, processGroup: false }, "SIGKILL");
   }
 
   close(): Promise<void> {
@@ -42,29 +44,37 @@ export class ProcessSupervisor {
 
   private async closeTracked(): Promise<void> {
     const entries = [...this.tracked.values()];
-    for (const entry of entries) terminate(entry);
-    await Promise.all(entries.map(({ child }) => waitForChild(child)));
+    const waits = entries.map(({ child }) => waitForChild(child));
+
+    for (const entry of entries) signalProcess(entry, "SIGTERM");
+    await waitForEntriesOrTimeout(entries, SHUTDOWN_TERM_GRACE_MS);
+
+    for (const entry of entries) {
+      if (isEntryRunning(entry)) signalProcess(entry, "SIGKILL");
+    }
+    await Promise.all(waits);
+    await waitForEntriesOrTimeout(entries, SHUTDOWN_TERM_GRACE_MS);
     this.tracked.clear();
   }
 }
 
-function terminate({ child, processGroup }: TrackedProcess): void {
+function signalProcess({ child, processGroup }: TrackedProcess, signal: NodeJS.Signals): void {
   const pid = child.pid;
   if (!pid) {
-    child.kill("SIGKILL");
+    child.kill(signal);
     return;
   }
 
   if (processGroup && process.platform !== "win32") {
     try {
-      process.kill(-pid, "SIGKILL");
+      process.kill(-pid, signal);
       return;
     } catch {
       // Fall through to killing the direct child.
     }
   }
 
-  if (processGroup && process.platform === "win32") {
+  if (processGroup && process.platform === "win32" && signal === "SIGKILL") {
     try {
       spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
         stdio: "ignore",
@@ -78,9 +88,36 @@ function terminate({ child, processGroup }: TrackedProcess): void {
   }
 
   try {
-    child.kill("SIGKILL");
+    child.kill(signal);
   } catch {
     // The process may already have exited.
+  }
+}
+
+function isRunning(child: ChildProcess): boolean {
+  return child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+}
+
+function isEntryRunning(entry: TrackedProcess): boolean {
+  if (entry.processGroup && process.platform !== "win32" && entry.child.pid !== undefined) {
+    return processGroupExists(entry.child.pid);
+  }
+  return isRunning(entry.child);
+}
+
+function processGroupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error: any) {
+    return error?.code !== "ESRCH";
+  }
+}
+
+async function waitForEntriesOrTimeout(entries: TrackedProcess[], timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (entries.some(isEntryRunning) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 

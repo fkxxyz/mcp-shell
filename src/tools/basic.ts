@@ -6,6 +6,7 @@ import type { ProcessSupervisor } from "../host/process-supervisor.js";
 import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import { invokeShellTool } from "./invoke.js";
+import type { InvocationGate } from "./invocation-gate.js";
 import { runBash } from "./basic/bash.js";
 import { editTextFile } from "./basic/edit.js";
 import { readTextFile } from "./basic/read.js";
@@ -24,6 +25,7 @@ const basicOutputSchema = {
 
 export function registerBasicTools(
   server: McpServer,
+  invocations: InvocationGate,
   shells: ShellStore,
   recorder: ToolCallRecorder,
   commandPath: CommandPathPolicy,
@@ -46,7 +48,7 @@ export function registerBasicTools(
       openWorldHint: false,
     },
     outputSchema: basicOutputSchema,
-  }, async (input, extra) => invokeShellTool(recorder, shells, "read", input, async (shell) => {
+  }, async (input, extra) => invokeShellTool(invocations, recorder, shells, "read", input, async (shell) => {
     const result = await readTextFile(shell.cwd, input, extra.signal);
     return {
       content: result.content,
@@ -69,7 +71,7 @@ export function registerBasicTools(
       openWorldHint: false,
     },
     outputSchema: basicOutputSchema,
-  }, async (input, extra) => invokeShellTool(recorder, shells, "write", input, async (shell) => {
+  }, async (input, extra) => invokeShellTool(invocations, recorder, shells, "write", input, async (shell) => {
     const result = await writeTextFile(shell.cwd, input, mutations, extra.signal);
     return {
       content: result.content,
@@ -95,7 +97,7 @@ export function registerBasicTools(
       openWorldHint: false,
     },
     outputSchema: basicOutputSchema,
-  }, async (input, extra) => invokeShellTool(recorder, shells, "edit", input, async (shell) => {
+  }, async (input, extra) => invokeShellTool(invocations, recorder, shells, "edit", input, async (shell) => {
     const result = await editTextFile(shell.cwd, input, mutations, extra.signal);
     return {
       content: result.content,
@@ -119,11 +121,11 @@ export function registerBasicTools(
       openWorldHint: true,
     },
     outputSchema: basicOutputSchema,
-  }, async (input, extra) => invokeShellTool(recorder, shells, "bash", input, async (shell) => {
+  }, async (input, extra) => invokeShellTool(invocations, recorder, shells, "bash", input, async (shell) => {
     const result = await runBash(shell.cwd, input, commandPath, processes, extra.signal);
     return {
       content: result.content,
       structuredContent: result,
     };
-  }));
+  }, { shutdownCancellable: true }));
 }

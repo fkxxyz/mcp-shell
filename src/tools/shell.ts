@@ -5,11 +5,13 @@ import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import { createShell } from "../shell.js";
 import type { ShellStore } from "../shell-store.js";
 import type { SkillCatalog } from "../skills.js";
+import type { InvocationGate } from "./invocation-gate.js";
 
 export const shellIdSchema = z.number().int().positive().describe("Shell ID returned by create_shell");
 
 export function registerShellTool(
   server: McpServer,
+  invocations: InvocationGate,
   shells: ShellStore,
   recorder: ToolCallRecorder,
   skills: SkillCatalog,
@@ -34,7 +36,7 @@ export function registerShellTool(
       idempotentHint: false,
       openWorldHint: false,
     },
-  }, async (input) => {
+  }, async (input) => invocations.run(async () => {
     const activityCwd = isAbsolute(input.cwd) ? resolve(input.cwd) : undefined;
     return recorder.run({ tool: "create_shell", input, cwd: activityCwd }, async () => {
       const result = await createShell(shells, input.cwd, { skillCatalog: skills });
@@ -51,5 +53,5 @@ export function registerShellTool(
       shellId: output.structuredContent.shell_id,
       cwd: activityCwd,
     }));
-  });
+  }));
 }

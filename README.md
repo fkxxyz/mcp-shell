@@ -125,7 +125,15 @@ http://127.0.0.1:<PORT>/mcp
 
 In remote mode, the MCP endpoint is `<PUBLIC_BASE_URL>/mcp` and the server listens on `0.0.0.0`. `PORT` defaults to `3000` in both modes.
 
-For long-running remote deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS.
+For long-running remote deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS. When using systemd, configure the service shutdown boundary so mcp-shell owns its three-second active-tool completion window while systemd remains the final process-tree guardrail:
+
+```ini
+[Service]
+KillMode=mixed
+TimeoutStopSec=15s
+```
+
+`KillMode=mixed` sends the initial stop signal only to the main process, then applies the final kill to the whole service cgroup if shutdown fails to converge. `KillMode=control-group` would terminate active tool descendants immediately and bypass mcp-shell's grace window.
 
 ### Web Console
 

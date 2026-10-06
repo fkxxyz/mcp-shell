@@ -11,9 +11,11 @@ import { registerLspTools } from "./lsp.js";
 import { registerReadImageTool } from "./read-image.js";
 import { registerSkillTool } from "./skill.js";
 import { registerShellTool } from "./shell.js";
+import type { InvocationGate } from "./invocation-gate.js";
 
 export function registerTools(
   server: McpServer,
+  invocations: InvocationGate,
   shells: ShellStore,
   recorder: ToolCallRecorder,
   commandPath: CommandPathPolicy,
@@ -21,10 +23,10 @@ export function registerTools(
   mutations: FileMutationCoordinator,
   processes: ProcessSupervisor,
 ) {
-	registerShellTool(server, shells, recorder, skills);
-	registerSkillTool(server, recorder, skills);
-	registerBasicTools(server, shells, recorder, commandPath, mutations, processes);
-	registerApplyPatchTool(server, shells, recorder, mutations);
-	registerLspTools(server, shells, recorder, commandPath, mutations);
-	registerReadImageTool(server, shells, recorder, commandPath, processes);
+	registerShellTool(server, invocations, shells, recorder, skills);
+	registerSkillTool(server, invocations, recorder, skills);
+	registerBasicTools(server, invocations, shells, recorder, commandPath, mutations, processes);
+	registerApplyPatchTool(server, invocations, shells, recorder, mutations);
+	registerLspTools(server, invocations, shells, recorder, commandPath, mutations);
+	registerReadImageTool(server, invocations, shells, recorder, commandPath, processes);
 }

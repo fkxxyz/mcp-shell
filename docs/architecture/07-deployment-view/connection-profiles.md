@@ -113,4 +113,6 @@ Tool-call payloads and activity metadata can contain host paths, commands, file 
 
 One process owns all MCP sessions. Restart terminates MCP sessions, while durable Shell state survives through `shells.db`. Remote OAuth token state survives through `state.json`; local mode does not initialize or require OAuth state for MCP access.
 
+When systemd owns the process, the service uses `KillMode=mixed` so the initial `SIGTERM` reaches the main process without immediately terminating tool descendants. This preserves the application-owned three-second completion window. `TimeoutStopSec=15s` provides the final whole-cgroup failure bound. The detailed ordering and rationale live in `../08-cross-cutting-concepts/process-lifecycle.md`.
+
 Production deployment builds before restart: Vite emits `dist/web/`, TypeScript emits `dist/server/`, and the server starts with `node dist/server/mcp-shell.js`. The Web Console is not independently deployed or versioned from the backend.

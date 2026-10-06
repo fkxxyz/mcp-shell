@@ -39,7 +39,8 @@ facets:
 | Correctness | A skill is malformed, unreadable, or missing required metadata. | That skill is diagnosed and skipped without preventing discovery of other skills or Shell creation. |
 | Correctness | `skill` is called after its `SKILL.md` changes. | The current filesystem is rescanned and the latest valid contents are returned using exact case-sensitive name matching. |
 | Operability | mcp-shell restarts after a Shell was created. | The existing `shell_id` still resolves to the persisted Shell root without loading the complete Shell history. |
-| Operability | The process receives SIGINT or SIGTERM. | HTTP admission stops, active MCP transports are closed, remaining supervised tool child processes are terminated, and authorization state is persisted. |
+| Operability | The process receives SIGINT or SIGTERM while no tool is active. | New HTTP/session/tool admission stops immediately and shutdown proceeds without waiting out the three-second tool grace window. |
+| Operability | The process receives SIGINT or SIGTERM while an external-process-backed tool is active. | The admitted tool has up to three seconds to finish normally; after that it is reported as interrupted by server shutdown, its managed process tree is converged, admitted responses drain, and shared stores close only afterward. |
 | Operability | A repository-wrapped broad search exceeds its normal budget. | It is terminated near the configured wall-clock budget and explains how to narrow or explicitly bypass the guardrail. |
 | Operability | A user has no public IP or server but has a supported local MCP client or trusted outbound tunnel. | No public mcp-shell listener or self-managed server is required. |
 | Maintainability | Connection mode changes. | Changes remain localized to configuration, HTTP composition, listener selection, and tests; MCP session/tool implementations remain unchanged unless their own contracts change. |
@@ -47,7 +48,7 @@ facets:
 | Correctness | `read` targets a very large file or a single line larger than its output budget. | Returned text stays bounded to the declared line/byte budget without first loading the complete file into memory. |
 | Correctness | `edit` receives text that differs only by Unicode quote, dash, or whitespace normalization. | The replacement is rejected; only newline normalization is allowed before exact matching. |
 | Correctness | Structured mutation tools target the same file concurrently. | `write`, `edit`, `apply_patch`, and LSP rename serialize their in-process mutation critical sections while unrelated paths remain concurrent. |
-| Operability | `bash` times out, is aborted, or remains active during application shutdown. | The managed Bash process group is terminated and does not outlive the owning mcp-shell runtime. |
+| Operability | `bash` times out, is aborted, or remains active past the application shutdown grace window. | The managed Bash process group, including surviving descendants after the group leader exits, is terminated and does not outlive the owning mcp-shell runtime. |
 | Observability | Tool-log persistence fails after a successful host action. | The persistence error is visible on stderr while the tool result retains the host action's actual outcome. |
 
 ## Verification
