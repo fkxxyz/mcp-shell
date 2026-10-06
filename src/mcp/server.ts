@@ -6,6 +6,7 @@ import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import type { SkillCatalog } from "../skills.js";
 import type { InvocationGate } from "../tools/invocation-gate.js";
+import type { LSPServerManager } from "../tools/lsp.js";
 import { registerTools } from "../tools/index.js";
 
 export function createMcpServer(
@@ -16,8 +17,9 @@ export function createMcpServer(
   skills: SkillCatalog,
   mutations: FileMutationCoordinator,
   processes: ProcessSupervisor,
+  lspManager: LSPServerManager,
 ): McpServer {
   const server = new McpServer({ name: "mcp-shell", version: "0.1.0" });
-  registerTools(server, invocations, shells, recorder, commandPath, skills, mutations, processes);
+  registerTools(server, invocations, shells, recorder, commandPath, skills, mutations, processes, lspManager);
   return server;
 }

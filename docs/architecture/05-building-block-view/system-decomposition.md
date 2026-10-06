@@ -46,7 +46,7 @@ Owns:
 
 ## HTTP and Authorization (`src/http/`, `src/auth/`)
 
-`src/http/app.ts` composes Express middleware and protocol routers. A process-wide request admission gate is installed before body parsing so shutdown can reject every new route uniformly while admitted requests remain drainable. The application runtime also owns the `SkillCatalog`, creating the default global catalog once or accepting an injected catalog for isolated composition such as tests, then passing that same instance into MCP session construction.
+`src/http/app.ts` composes Express middleware and protocol routers. A process-wide request admission gate is installed before body parsing so shutdown can reject every new route uniformly while admitted requests remain drainable. The application runtime owns shared runtime resources such as the `SkillCatalog` and `LSPServerManager`, creating one default instance of each per application runtime (or accepting injected instances for isolated composition such as tests) and passing those same instances through MCP session construction.
 
 `src/auth/` owns:
 
@@ -97,7 +97,7 @@ Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root 
 
 `src/tools/invocation-gate.ts` owns process-wide tool admission and active-invocation counting. `src/tools/invoke.ts` is the shared Shell-aware invocation boundary and enters that gate before Shell resolution or tool-call recording. `create_shell` and `skill`, which are not Shell-aware invocations, enter the same gate directly. Shutdown therefore has one tool-work boundary without making observability responsible for lifecycle correctness.
 
-`src/runtime/drain-gate.ts` provides the narrow close-admission-and-drain primitive shared by HTTP and tool lifecycle boundaries. `src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking. `ProcessSupervisor` owns registered tool child processes; application shutdown gives active tools three seconds to finish naturally, then the supervisor sends process-group `SIGTERM`, waits one second, and escalates survivors to `SIGKILL`. These services are application-owned and shared across MCP sessions.
+`src/runtime/drain-gate.ts` provides the narrow close-admission-and-drain primitive shared by HTTP and tool lifecycle boundaries. `src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking. `ProcessSupervisor` owns registered tool child processes; application shutdown gives active tools three seconds to finish naturally, then the supervisor sends process-group `SIGTERM`, waits one second, and escalates survivors to `SIGKILL`. `LSPServerManager` owns the reusable LSP-client pool and its idle lifecycle. These resources are application-owned and shared across MCP sessions rather than process-global or session-local.
 
 ## Command Policy (`src/command-path.ts`, `bin/`)
 

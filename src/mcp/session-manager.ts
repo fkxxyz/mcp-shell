@@ -8,6 +8,7 @@ import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
 import type { SkillCatalog } from "../skills.js";
 import type { InvocationGate } from "../tools/invocation-gate.js";
+import type { LSPServerManager } from "../tools/lsp.js";
 import { createMcpServer } from "./server.js";
 
 export class McpSessionManager {
@@ -23,6 +24,7 @@ export class McpSessionManager {
     private readonly skills: SkillCatalog,
     private readonly mutations: FileMutationCoordinator,
     private readonly processes: ProcessSupervisor,
+    private readonly lspManager: LSPServerManager,
   ) {}
 
   get(sessionId: string | undefined): StreamableHTTPServerTransport | undefined {
@@ -63,6 +65,7 @@ export class McpSessionManager {
       this.skills,
       this.mutations,
       this.processes,
+      this.lspManager,
     );
     await server.connect(transport);
     if (this.closing) {

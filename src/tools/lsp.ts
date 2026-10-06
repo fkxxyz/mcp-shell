@@ -1470,33 +1470,12 @@ type ManagedClient = {
   initializingSince?: number
 }
 
-class LSPServerManager {
-  private static instance: LSPServerManager | undefined
-  private static closing = false
+export class LSPServerManager {
   private clients = new Map<string, ManagedClient>()
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
   private closePromise: Promise<void> | undefined
   private readonly IDLE_TIMEOUT = 5 * 60 * 1000
   private readonly INIT_TIMEOUT = 60 * 1000
-
-  private constructor() {
-    this.startCleanupTimer()
-  }
-
-  static getInstance(): LSPServerManager {
-    if (LSPServerManager.closing) throw new Error("LSP server manager is closing")
-    if (!LSPServerManager.instance) {
-      LSPServerManager.instance = new LSPServerManager()
-    }
-    return LSPServerManager.instance
-  }
-
-  static async closeInstance(): Promise<void> {
-    LSPServerManager.closing = true
-    const instance = LSPServerManager.instance
-    if (!instance) return
-    await instance.close()
-  }
 
   private key(root: string, serverId: string): string {
     return `${root}::${serverId}`
@@ -1520,6 +1499,7 @@ class LSPServerManager {
 
   async getClient(root: string, server: ResolvedServer, commandPath: CommandPathPolicy): Promise<LSPClient> {
     if (this.closePromise) throw new Error("LSP server manager is closing")
+    this.startCleanupTimer()
 
     const key = this.key(root, server.id)
     let managed = this.clients.get(key)
@@ -1632,15 +1612,8 @@ class LSPServerManager {
   }
 }
 
-function getLspManager(): LSPServerManager {
-  return LSPServerManager.getInstance()
-}
-
-export function closeLspServers(): Promise<void> {
-  return LSPServerManager.closeInstance()
-}
-
 async function withLspClient<T>(
+  manager: LSPServerManager,
   projectDirectory: string,
   filePath: string,
   commandPath: CommandPathPolicy,
@@ -1657,7 +1630,6 @@ async function withLspClient<T>(
   }
 
   const root = findWorkspaceRoot(absPath)
-  const manager = getLspManager()
   const client = await manager.getClient(root, result.server, commandPath)
   try {
     return await fn(client)
@@ -1908,6 +1880,7 @@ function collectFilesWithExtension(directory: string, extension: string, maxFile
 }
 
 async function aggregateDiagnosticsForDirectory(
+  manager: LSPServerManager,
   projectDirectory: string,
   directory: string,
   extension: string,
@@ -1940,7 +1913,6 @@ async function aggregateDiagnosticsForDirectory(
   const root = findWorkspaceRoot(absDir)
   const allDiagnostics: Array<{ filePath: string; diagnostic: Diagnostic }> = []
   const fileErrors: Array<{ file: string; error: string }> = []
-  const manager = getLspManager()
   const client = await manager.getClient(root, serverResult.server, commandPath)
 
   try {
@@ -2008,6 +1980,7 @@ export function registerLspTools(
   recorder: ToolCallRecorder,
   commandPath: CommandPathPolicy,
   mutations: FileMutationCoordinator,
+  manager: LSPServerManager,
 ) {
   const schemas: Record<string, Record<string, z.ZodType>> = {
     lsp_goto_definition: {
@@ -2085,7 +2058,7 @@ export function registerLspTools(
       if (signal?.aborted) throw new Error("aborted");
       try {
         const filePath = normalizePath(ctx.cwd, params.filePath);
-        const result = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.definition(filePath, params.line, params.character) as Promise<Location | Location[] | LocationLink[] | null>);
+        const result = await withLspClient(manager, ctx.cwd, filePath, commandPath, (client) => client.definition(filePath, params.line, params.character) as Promise<Location | Location[] | LocationLink[] | null>);
         if (!result) return textResult("No definition found");
         const locations = Array.isArray(result) ? result : [result];
         if (locations.length === 0) return textResult("No definition found");
@@ -2111,7 +2084,7 @@ export function registerLspTools(
       if (signal?.aborted) throw new Error("aborted");
       try {
         const filePath = normalizePath(ctx.cwd, params.filePath);
-        const result = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.references(filePath, params.line, params.character, params.includeDeclaration ?? true) as Promise<Location[] | null>);
+        const result = await withLspClient(manager, ctx.cwd, filePath, commandPath, (client) => client.references(filePath, params.line, params.character, params.includeDeclaration ?? true) as Promise<Location[] | null>);
         if (!result || result.length === 0) return textResult("No references found");
         const total = result.length;
         const limited = total > DEFAULT_MAX_REFERENCES ? result.slice(0, DEFAULT_MAX_REFERENCES) : result;
@@ -2143,7 +2116,7 @@ export function registerLspTools(
 
         if (scope === "workspace") {
           if (!params.query) return textResult("Error: 'query' is required for workspace scope");
-          const result = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.workspaceSymbols(params.query!) as Promise<SymbolInfo[] | null>);
+          const result = await withLspClient(manager, ctx.cwd, filePath, commandPath, (client) => client.workspaceSymbols(params.query!) as Promise<SymbolInfo[] | null>);
           if (!result || result.length === 0) return textResult("No symbols found");
           const limit = Math.min(params.limit ?? DEFAULT_MAX_SYMBOLS, DEFAULT_MAX_SYMBOLS);
           const lines = result.slice(0, limit).map(formatSymbolInfo);
@@ -2151,7 +2124,7 @@ export function registerLspTools(
           return textResult(lines.join("\n"), { total: result.length, shown: Math.min(result.length, limit) });
         }
 
-        const result = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.documentSymbols(filePath) as Promise<DocumentSymbol[] | SymbolInfo[] | null>);
+        const result = await withLspClient(manager, ctx.cwd, filePath, commandPath, (client) => client.documentSymbols(filePath) as Promise<DocumentSymbol[] | SymbolInfo[] | null>);
         if (!result || result.length === 0) return textResult("No symbols found");
         const limit = Math.min(params.limit ?? DEFAULT_MAX_SYMBOLS, DEFAULT_MAX_SYMBOLS);
         const limited = result.slice(0, limit);
@@ -2185,9 +2158,9 @@ export function registerLspTools(
         const absoluteTarget = normalizePath(ctx.cwd, targetPath);
         if (isDirectoryPath(absoluteTarget)) {
           if (!params.extension) throw new Error("Directory path requires 'extension' parameter. Example: lsp_diagnostics(filePath='src', extension='.ts')");
-          return textResult(await aggregateDiagnosticsForDirectory(ctx.cwd, absoluteTarget, params.extension, commandPath, params.severity));
+          return textResult(await aggregateDiagnosticsForDirectory(manager, ctx.cwd, absoluteTarget, params.extension, commandPath, params.severity));
         }
-        const result = await withLspClient(ctx.cwd, absoluteTarget, commandPath, (client) => client.diagnostics(absoluteTarget) as Promise<{ items?: Diagnostic[] } | Diagnostic[] | null>);
+        const result = await withLspClient(manager, ctx.cwd, absoluteTarget, commandPath, (client) => client.diagnostics(absoluteTarget) as Promise<{ items?: Diagnostic[] } | Diagnostic[] | null>);
         let diagnostics: Diagnostic[] = [];
         if (Array.isArray(result)) diagnostics = result;
         else if (result?.items) diagnostics = result.items;
@@ -2217,7 +2190,7 @@ export function registerLspTools(
       if (signal?.aborted) throw new Error("aborted");
       try {
         const filePath = normalizePath(ctx.cwd, params.filePath);
-        const result = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.prepareRename(filePath, params.line, params.character) as Promise<PrepareRenameResult | PrepareRenameDefaultBehavior | Range | null>);
+        const result = await withLspClient(manager, ctx.cwd, filePath, commandPath, (client) => client.prepareRename(filePath, params.line, params.character) as Promise<PrepareRenameResult | PrepareRenameDefaultBehavior | Range | null>);
         return textResult(formatPrepareRenameResult(result), { result });
       } catch (error) {
         return errorText(error);
@@ -2240,7 +2213,7 @@ export function registerLspTools(
       if (signal?.aborted) throw new Error("aborted");
       try {
         const filePath = normalizePath(ctx.cwd, params.filePath);
-        const edit = await withLspClient(ctx.cwd, filePath, commandPath, (client) => client.rename(filePath, params.line, params.character, params.newName) as Promise<WorkspaceEdit | null>);
+        const edit = await withLspClient(manager, ctx.cwd, filePath, commandPath, (client) => client.rename(filePath, params.line, params.character, params.newName) as Promise<WorkspaceEdit | null>);
         const result = await mutations.runExclusive(
           workspaceEditPaths(edit),
           async () => applyWorkspaceEdit(edit),

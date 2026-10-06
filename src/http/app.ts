@@ -16,7 +16,7 @@ import { ShellStore } from "../shell-store.js";
 import { SkillCatalog } from "../skills.js";
 import { DrainGate } from "../runtime/drain-gate.js";
 import { InvocationGate } from "../tools/invocation-gate.js";
-import { closeLspServers } from "../tools/lsp.js";
+import { LSPServerManager } from "../tools/lsp.js";
 import {
   createActivityApiRouter,
 } from "./activity-routes.js";
@@ -38,6 +38,7 @@ const TOOL_SHUTDOWN_GRACE_MS = 3_000;
 
 export type AppDependencies = {
   skills?: SkillCatalog;
+  lspManager?: LSPServerManager;
   webRoot?: string;
 };
 
@@ -70,6 +71,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   const query = new ActivityQuery(shells, logs, activity);
   const mutations = new FileMutationCoordinator();
   const processes = new ProcessSupervisor();
+  const lspManager = dependencies.lspManager ?? new LSPServerManager();
   const sessions = new McpSessionManager(
     invocations,
     shells,
@@ -78,6 +80,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
     skills,
     mutations,
     processes,
+    lspManager,
   );
 
   if (config.webPassword) {
@@ -137,7 +140,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
 
     await Promise.all([
       processes.close(),
-      closeLspServers(),
+      lspManager.close(),
     ]);
     await invocations.drained();
     await requests.drained();
