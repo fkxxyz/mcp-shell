@@ -54,6 +54,14 @@ Shells are intentionally not enumerable or closable through MCP. An agent create
 
 OAuth token state, durable Shell state, and tool logs live under `~/.mcp-shell/`. OAuth state remains JSON; Shell state uses SQLite because Shell count grows monotonically and access is by `shell_id`, avoiding whole-history loads or rewrites. The system still assumes one host and does not introduce a distributed coordinator.
 
+## One Tool-Call Lifecycle, Multiple Observability Projections
+
+Tool execution, durable evidence, and live browser activity share one tool-call lifecycle instead of maintaining separate instrumentation paths. `ShellStore` remains authoritative for Shell roots; one recorder coordinates call lifecycle; durable logs and bounded in-memory activity are separate projections.
+
+The activity UI groups Shells by persisted root `cwd`, because the working directory is the useful project-level identity for an operator. This grouping remains a read model rather than a durable Workspace entity.
+
+The initial browser surface stays deliberately small: same-process static assets, bounded snapshot plus SSE deltas, and client-owned two-tier stable ordering. WebSocket transport, durable event replay, analytics, a frontend build system, and a tool-log database migration require demonstrated need before adoption.
+
 ## Guardrails, Not Sandboxing
 
 Search wrappers bound accidental broad scans; tool annotations describe read/write/destructive intent to MCP clients; logs record actions. None of these are treated as containment against an authorized caller.

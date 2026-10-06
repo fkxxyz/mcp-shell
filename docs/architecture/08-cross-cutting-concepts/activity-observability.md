@@ -1,0 +1,269 @@
+---
+summary: "Defines workspace-oriented tool activity, observability ownership, read models, live delivery, and browser UI boundaries."
+viewpoint: static
+stakeholders:
+  - architect
+  - developer
+  - operator
+concerns:
+  - architecture-coherence
+  - correctness
+  - maintainability
+  - operability
+  - security
+activities:
+  - orient
+  - change
+  - diagnose
+  - operate
+  - assess
+facets:
+  domain:
+    - observability
+    - access-and-transport
+    - host-tools
+    - whole-system
+---
+
+# Activity Observability
+
+## User Model
+
+The activity surface answers one primary question:
+
+> Which working directories are agents operating in, and what are they doing there now?
+
+The user-facing grouping key is a Shell root cwd, not shell_id. A Shell remains a distinct durable execution context; multiple Shells rooted at the same cwd are grouped as one workspace in the activity read model.
+
+This grouping is a projection only. It does not introduce a durable Workspace entity.
+
+## Identity Rules
+
+- ShellStore is authoritative for shell_id -> cwd.
+- Workspace identity is the normalized absolute cwd already stored by ShellStore.
+- Activity code does not add realpath() canonicalization or otherwise change Shell identity semantics.
+- Multiple Shells may share one cwd and remain distinct.
+- A Shell root is stable even if one command changes its own process working directory.
+- create_shell knows its requested cwd before a resulting shell_id exists, so activity metadata permits shell_id to be absent while cwd is known.
+
+## Tool-Call Lifecycle
+
+ToolCallRecorder is the single control point for recorded tool invocation lifecycle:
+
+1. assign call ID and start time;
+2. publish the running call to ActivityTracker;
+3. execute the original tool operation;
+4. construct the final success or error record;
+5. ask ToolLogStore to persist the completed record;
+6. publish the completed state to ActivityTracker; and
+7. preserve the original tool result or original tool error.
+
+Observability is best-effort with respect to host-tool semantics. Logging or activity publication failure must not convert a successful host operation into a failed tool call, and must not replace the original tool error.
+
+## Shell-Aware Invocation
+
+src/tools/invoke.ts is the shared invocation boundary for Shell-aware tools. It resolves the requested shell_id through ShellStore, obtains the Shell root, and supplies that identity to ToolCallRecorder before invoking tool-specific behavior.
+
+Basic file/shell tools, patching, image inspection, and LSP tools do not independently reimplement Shell resolution plus activity recording.
+
+Unknown shell_id failures remain observable calls: the requested Shell ID is known while resolved cwd is absent.
+
+create_shell uses the general recorder rather than Shell-aware invocation. Its requested cwd is available while running; after success the completed call may also include the created shell_id.
+
+## ToolLogStore
+
+ToolLogStore owns persistent tool-log mechanics:
+
+- gzip payload files;
+- append-only lightweight index entries;
+- atomic payload publication;
+- count-bounded payload retention;
+- recent-index tail reads;
+- payload retrieval; and
+- compatibility parsing for older index entries.
+
+Completed records are durable evidence. Running calls are not persisted merely for the UI, avoiding recovery semantics for orphaned running records after process termination.
+
+The initial backing format remains gzip payloads plus index.jsonl. A query database is not introduced until measured startup or query costs justify it. Consumers depend on ToolLogStore, not JSONL layout, so the backing index can change later without changing tool execution or HTTP contracts.
+
+New lightweight index entries carry enough identity for workspace activity without decompressing payloads:
+
+    id
+    sequence
+    shell_id?
+    cwd?
+    started_at
+    finished_at
+    duration_ms
+    session?
+    actor?
+    tool
+    status
+    stored_bytes
+    file
+
+Full input, output, and serialized errors remain in the gzip payload and are fetched only when a specific call is opened.
+
+Older index entries lacking shell_id or cwd remain valid log history. Startup does not decompress old payloads merely to backfill workspace identity.
+
+## Bounded Startup and Runtime State
+
+An append-only index must not make startup cost proportional to installation lifetime. ToolLogStore therefore reads the recent index window from the end of the file in bounded chunks and stops after collecting the required number of valid entries.
+
+The in-memory activity-history window is independently capped at 10,000 completed calls, even when `TOOL_LOG_MAX_CALLS` is configured much higher for payload retention. Raising durable payload retention therefore does not proportionally increase activity bootstrap time or steady-state activity memory.
+
+Malformed historical lines are reported and skipped instead of preventing MCP startup. Observability remains subordinate to host-tool availability.
+
+ActivityTracker owns only bounded in-process state:
+
+- currently running calls;
+- recent completed summaries;
+- per-workspace recent summaries;
+- per-workspace latest lifecycle-event time; and
+- connected live-feed subscribers.
+
+Completed-call retirement is one lifecycle across the projection: when a call leaves the bounded global history it also leaves any workspace recent-call projection, and a workspace with neither running nor retained recent calls is removed. This prevents UI-visible calls or workspaces from outliving the queryable activity window.
+
+It does not read gzip payloads, enumerate Shells, persist workspace state, or decide visual ranking tiers.
+
+## Query Composition
+
+ActivityQuery composes read models from ActivityTracker, ShellStore, and ToolLogStore.
+
+ShellStore remains authoritative for Shell existence and provides bounded cwd -> Shells queries needed by the UI. Tool logs are not used to infer the complete Shell inventory.
+
+HTTP handlers delegate read-model assembly to ActivityQuery; they do not accumulate cross-store query logic.
+
+## HTTP Surface
+
+The activity surface is grouped under one protected path:
+
+    /activity/
+      index.html
+      styles.css
+      js/*
+      api/v1/
+        stream
+        shells
+        shells/:shell_id/calls
+        tool-calls/:call_id
+
+The API is read-only. It does not expose tool execution, rerun, Shell close, log deletion, settings mutation, ranking, analytics, or workspace CRUD.
+
+The live endpoint uses Server-Sent Events because delivery is server-to-browser only. A connection receives:
+
+1. a bounded current snapshot;
+2. tool_call.started events; and
+3. tool_call.finished events.
+
+Summary events contain identity, lifecycle timestamps, status, and payload availability, not complete tool inputs or outputs.
+
+## Snapshot-to-Live Consistency
+
+Opening a live feed is atomic with respect to the in-process projection:
+
+1. register a bounded subscriber queue;
+2. capture the current snapshot synchronously;
+3. send the snapshot;
+4. drain events queued after snapshot capture; and
+5. continue live delivery.
+
+This avoids the snapshot/live race without introducing durable event replay or Last-Event-ID.
+
+Each subscriber queue is bounded. If a client cannot consume events fast enough, the stream is closed rather than allowing unbounded server memory growth. Reconnection obtains a fresh snapshot.
+
+## Browser State and Ordering
+
+The browser owns presentation policy. It maintains exactly two groups:
+
+- ACTIVE: a workspace has a running call, or its latest lifecycle event is less than ten minutes old;
+- EARLIER: otherwise.
+
+Repeated calls within ACTIVE update content without reordering the workspace. A workspace promoted from EARLIER enters the front of ACTIVE. A local expiry timer demotes inactive workspaces even when no new server event arrives.
+
+The ten-minute threshold, ACTIVE/EARLIER state, stable ordering, and visual rank are not persisted backend state.
+
+## Browser Implementation Boundary
+
+The initial UI is a static ES-module application under web/:
+
+    web/
+      index.html
+      styles.css
+      js/
+        main.js
+        api.js
+        activity-state.js
+        activity-view.js
+        format.js
+
+The initial implementation deliberately avoids a separate frontend build system while the interaction model remains small. The HTTP API is the stable boundary, allowing a future framework migration without changing observability storage or tool execution.
+
+activity-state.js owns the two-tier ordering and event merge rules. activity-view.js owns DOM rendering. api.js owns HTTP/SSE interaction. Presentation policy does not leak into backend persistence.
+
+Tool inputs, outputs, errors, and repository-controlled text are rendered as text, not interpreted as HTML. The UI must not use untrusted tool content as innerHTML.
+
+## Access and Browser Security
+
+The existing remote service continues to use one listener and one public origin. Authentication is separated by path and authority:
+
+    /mcp         -> existing OAuth bearer -> full MCP/host authority
+    /activity/*  -> HTTP Basic Auth       -> read-only observability
+
+The two credential types are not interchangeable. Activity Basic credentials are never accepted by /mcp; the browser does not need or receive an MCP bearer token.
+
+The activity Basic password is configured independently through `ACTIVITY_PASSWORD`; the Basic username is fixed by the application rather than adding another configuration surface. If `ACTIVITY_PASSWORD` is absent, the entire `/activity/*` surface is not mounted. This makes activity exposure opt-in and fail-closed.
+
+Brute-force protection and public-edge rate limiting are deployment concerns owned by the upstream ingress rather than application-local state.
+
+Because HTTP Basic credentials are replayable credentials, remote activity access requires HTTPS at the public ingress.
+
+All /activity/* resources, including static assets, API endpoints, and SSE, sit behind the same Basic Auth middleware. Activity API responses use Cache-Control: no-store; the UI does not enable cross-origin API access.
+
+The UI uses a restrictive Content Security Policy appropriate for same-origin static assets and SSE, including no object embedding, no framing, and no interpretation of tool output as executable markup.
+
+## Target Source Organization
+
+    src/
+      shell.ts
+      shell-store.ts
+      tools/
+        invoke.ts
+        ...
+      observability/
+        tool-call.ts
+        tool-call-recorder.ts
+        tool-log-store.ts
+        activity-tracker.ts
+        activity-query.ts
+      http/
+        app.ts
+        activity-routes.ts
+        ui-routes.ts
+
+    web/
+      index.html
+      styles.css
+      js/
+        main.js
+        api.js
+        activity-state.js
+        activity-view.js
+        format.js
+
+No generic repository/service/adapter hierarchy is introduced. Each module corresponds to a concrete ownership boundary.
+
+## Deliberate Non-Goals
+
+The first implementation does not introduce:
+
+- WebSocket transport;
+- durable event replay;
+- a second workspace database;
+- SQLite migration for tool-log metadata without measured need;
+- server-side activity scores or tiers;
+- frontend framework/build tooling;
+- application-local brute-force state; or
+- analytics dashboards.
+
+These remain reassessment points rather than abstractions to build in advance.

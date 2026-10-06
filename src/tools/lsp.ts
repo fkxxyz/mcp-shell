@@ -21,8 +21,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Type } from "typebox";
 import { z } from "zod";
 import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
-import { recordToolCall } from "../tool-logs.js";
+import { invokeShellTool } from "./invoke.js";
 import { shellIdSchema } from "./shell.js";
 
 const DEFAULT_MAX_REFERENCES = 200
@@ -1965,7 +1966,7 @@ function errorText(error: unknown): ToolTextResult {
   return textResult(`Error: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-export function registerLspTools(server: McpServer, shells: ShellStore, commandPath: CommandPathPolicy) {
+export function registerLspTools(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder, commandPath: CommandPathPolicy) {
   const schemas: Record<string, Record<string, z.ZodType>> = {
     lsp_goto_definition: {
       shell_id: shellIdSchema, filePath: z.string(), line: z.number().int().min(1), character: z.number().int().min(0),
@@ -2010,10 +2011,9 @@ export function registerLspTools(server: McpServer, shells: ShellStore, commandP
         annotations: config.name === "lsp_rename"
           ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
           : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      }, async (params, extra) => recordToolCall(config.name, params, async () => {
-        const cwd = shells.require(params.shell_id as number).cwd;
+      }, async (params, extra) => invokeShellTool(recorder, shells, config.name, params, async (shell) => {
         const { shell_id: _shellId, ...toolParams } = params;
-        const result = await config.execute("mcp", toolParams, extra.signal, undefined, { cwd });
+        const result = await config.execute("mcp", toolParams, extra.signal, undefined, { cwd: shell.cwd });
         const text = result.content
           .filter((item: { type: string }) => item.type === "text")
           .map((item: { text?: string }) => item.text ?? "")

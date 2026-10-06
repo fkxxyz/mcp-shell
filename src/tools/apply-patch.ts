@@ -2,8 +2,9 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
-import { recordToolCall } from "../tool-logs.js";
+import { invokeShellTool } from "./invoke.js";
 import { shellIdSchema } from "./shell.js";
 
 const DESCRIPTION = `Use the \`apply_patch\` tool to edit files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
@@ -599,7 +600,7 @@ async function applyChanges(fileChanges: FileChange[]): Promise<void> {
 	}
 }
 
-export function registerApplyPatchTool(server: McpServer, shells: ShellStore) {
+export function registerApplyPatchTool(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder) {
 	return server.registerTool("apply_patch", {
 		description: DESCRIPTION,
 		inputSchema: {
@@ -626,9 +627,9 @@ export function registerApplyPatchTool(server: McpServer, shells: ShellStore) {
 			})),
 			diagnostics: z.record(z.string(), z.unknown()),
 		},
-	}, async (input, extra) => recordToolCall("apply_patch", input, async () => {
+	}, async (input, extra) => invokeShellTool(recorder, shells, "apply_patch", input, async (shell) => {
 		const { patchText } = input;
-		const cwd = shells.require(input.shell_id).cwd;
+		const cwd = shell.cwd;
 		const signal = extra.signal;
 			if (signal?.aborted) throw new Error("aborted");
 			if (!patchText) throw new Error("patchText is required");

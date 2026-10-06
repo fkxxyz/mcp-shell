@@ -23,6 +23,7 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Persistent Shell execution contexts
 - Persistent token state
 - Tool-call logging
+- Optional live activity dashboard grouped by workspace
 - Guardrails for broad filesystem searches
 
 ## Security
@@ -84,6 +85,7 @@ OAUTH_REDIRECT_URI=
 OAUTH_REDIRECT_URI_ALLOWLIST=
 TOOL_LOG_DIR=
 TOOL_LOG_MAX_CALLS=10000
+ACTIVITY_PASSWORD=
 ```
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
@@ -103,6 +105,16 @@ http://127.0.0.1:<PORT>/mcp
 In remote mode, the MCP endpoint is `<PUBLIC_BASE_URL>/mcp` and the server listens on `0.0.0.0`. `PORT` defaults to `3000` in both modes.
 
 For long-running remote deployment, run it under a service manager such as systemd and place a reverse proxy such as Traefik or nginx in front of it for HTTPS.
+
+### Activity dashboard
+
+Set `ACTIVITY_PASSWORD` to enable the read-only activity UI:
+
+```text
+<base-url>/activity/
+```
+
+Use HTTP Basic Auth username `activity` and the configured password. The activity credential is separate from MCP OAuth and is never accepted by `/mcp`. Remote use requires HTTPS. The dashboard groups tool activity by Shell root directory, shows live calls through SSE, and loads full tool input/output only when a call is opened.
 
 ## Connect
 
@@ -187,7 +199,8 @@ src/http/          HTTP application
 src/mcp/           MCP server and session handling
 src/shell*.ts      durable Shell state and bootstrap
 src/tools/         MCP tool implementations
-src/tool-logs.ts   tool-call logging
+src/observability/ tool-call logging and live activity
+web/               static activity dashboard
 bin/               command wrappers
 test/              automated tests
 ```

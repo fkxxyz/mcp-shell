@@ -15,6 +15,11 @@ export type ConnectionMode = "local" | "remote";
 type BaseAppConfig = {
   port: number;
   commandPath: CommandPathPolicy;
+  activityPassword?: string;
+  toolLogs: {
+    dir: string;
+    maxCalls: number;
+  };
   paths: {
     configDir: string;
     envFile: string;
@@ -74,9 +79,16 @@ export async function loadConfig(): Promise<AppConfig> {
   replaceProcessEnvironment(applyCommandPath(process.env, commandPath) as EnvMap);
 
   const mode = parseConnectionMode(process.env.MODE);
+  const toolLogDir = process.env.TOOL_LOG_DIR
+    ? resolveConfiguredPath(process.env.TOOL_LOG_DIR, configDir)
+    : join(configDir, "tool-logs");
+  const toolLogMaxCalls = parsePositiveInteger(process.env.TOOL_LOG_MAX_CALLS, 10_000);
+  const activityPassword = process.env.ACTIVITY_PASSWORD || undefined;
   const common = {
     port: Number(process.env.PORT ?? 3000),
     commandPath,
+    activityPassword,
+    toolLogs: { dir: toolLogDir, maxCalls: toolLogMaxCalls },
     paths: { configDir, envFile, shellEnvFile, stateFile, shellsDbFile, userBinDir, repoBinDir },
   };
 
@@ -124,6 +136,8 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "# Tool call history. Payloads are gzip-compressed and the oldest calls are removed by count.",
       "TOOL_LOG_DIR=",
       "TOOL_LOG_MAX_CALLS=10000",
+      "# Optional read-only activity dashboard. When blank, /activity is not mounted.",
+      "ACTIVITY_PASSWORD=",
       "# Optional shell file to source at startup for PATH and other user environment variables:",
       "SHELL_ENV_FILE=~/.shellenv",
       "",
@@ -231,6 +245,13 @@ function replaceProcessEnvironment(env: EnvMap): void {
     if (!(key in env)) delete process.env[key];
   }
   Object.assign(process.env, env);
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (value == null || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return parsed;
 }
 
 function mustEnv(name: string, envFile: string): string {

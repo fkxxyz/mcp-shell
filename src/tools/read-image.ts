@@ -5,8 +5,9 @@ import { resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { applyCommandPath, type CommandPathPolicy } from "../command-path.js";
+import type { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import type { ShellStore } from "../shell-store.js";
-import { recordToolCall } from "../tool-logs.js";
+import { invokeShellTool } from "./invoke.js";
 import { shellIdSchema } from "./shell.js";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
@@ -208,7 +209,7 @@ export async function readImage(
   };
 }
 
-export function registerReadImageTool(server: McpServer, shells: ShellStore, commandPath: CommandPathPolicy) {
+export function registerReadImageTool(server: McpServer, shells: ShellStore, recorder: ToolCallRecorder, commandPath: CommandPathPolicy) {
   return server.registerTool("read_image", {
     title: "Read Image",
     description:
@@ -225,8 +226,7 @@ export function registerReadImageTool(server: McpServer, shells: ShellStore, com
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async (input, extra) => recordToolCall("read_image", input, () => {
-    const cwd = shells.require(input.shell_id).cwd;
-    return readImage(cwd, input.path, extra.signal, commandPath);
-  }));
+  }, async (input, extra) => invokeShellTool(recorder, shells, "read_image", input, (shell) =>
+    readImage(shell.cwd, input.path, extra.signal, commandPath)
+  ));
 }

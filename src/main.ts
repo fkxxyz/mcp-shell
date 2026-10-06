@@ -15,6 +15,13 @@ async function main(): Promise<void> {
       console.log(`OAuth issuer:   ${config.publicBaseUrl}`);
       console.log(`State file:     ${config.paths.stateFile}`);
     }
+    if (config.activityPassword) {
+      const activityBase = config.mode === "local"
+        ? `http://${listenHost}:${config.port}`
+        : config.publicBaseUrl;
+      console.log(`Activity UI:    ${activityBase}/activity/`);
+      console.log("Activity user:  activity");
+    }
     console.log(`Config file:    ${config.paths.envFile}`);
     console.log(`Shell env file: ${config.paths.shellEnvFile ?? "(none)"}`);
   });

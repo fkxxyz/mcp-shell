@@ -41,6 +41,8 @@ host tools
 
 Remote mode binds to `0.0.0.0`, requires `PUBLIC_BASE_URL` and OAuth secrets, publishes OAuth discovery routes, and protects `/mcp` with bearer authentication.
 
+The same listener may also serve the activity dashboard at `/activity/*`. That subtree uses independent HTTP Basic authentication and read-only activity authority; its credential is not accepted by `/mcp`. Public remote use assumes HTTPS at the ingress because Basic credentials are replayable if transported in cleartext.
+
 ## Local
 
 ```text
@@ -82,6 +84,8 @@ This is not a separate mcp-shell mode. It reuses `local` mode; tunnel identity a
 The process uses `~/.mcp-shell/` for configuration, token state, durable Shell state, user command overrides, and default tool logs. Configuration/state/log directories and sensitive state files are created with restrictive owner permissions where the implementation manages them.
 
 `~/.mcp-shell/shells.db` stores Shell IDs and their roots. Agents create Shells explicitly with absolute roots; subsequent relative operations are resolved from the selected Shell rather than the process launch directory.
+
+Tool-call payloads and activity metadata can contain host paths, commands, file content, outputs, and errors. They are therefore treated as sensitive owner data even though the activity HTTP surface is read-only.
 
 ## Lifecycle
 

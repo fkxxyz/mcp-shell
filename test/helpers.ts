@@ -14,6 +14,10 @@ export function makeConfig(overrides: Partial<RemoteAppConfig["oauth"]> = {}): R
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",
     },
+    toolLogs: {
+      dir: "/unused/tool-logs",
+      maxCalls: 10_000,
+    },
     oauth: {
       clientId: "chatgpt",
       clientSecret: "client-secret",

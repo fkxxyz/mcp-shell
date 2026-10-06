@@ -14,7 +14,7 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 - `src/http/app.ts` assembles the Express application and owns application-level cleanup.
 - `src/auth/` contains OAuth protocol logic, token state persistence, bearer middleware, and HTTP routes.
 - `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
-- `src/tool-logs.ts` records complete tool inputs and outputs as one gzip payload per call under `~/.mcp-shell/tool-logs/`, with lightweight metadata in `index.jsonl`.
+- `src/observability/` owns the unified tool-call lifecycle, gzip payload logging, lightweight `index.jsonl` metadata, bounded live activity projection, and activity read models.
 - `src/tools/` contains modular MCP registrations. `basic.ts` adapts Pi's built-in `read`, `write`, `edit`, and `bash` tools; `apply-patch.ts` and `lsp.ts` adapt Pi code-extension implementations.
 - `@earendil-works/pi-coding-agent` supplies the built-in Pi tool implementations. MCP input schemas are declared locally with Zod.
 - Express handles HTTP routes and form/JSON parsing.
@@ -38,6 +38,7 @@ The MCP server exposes Pi-compatible file and shell tools, a structured patch to
 - `GET /authorize`, `POST /authorize`: authorization UI and authorization-code issuance.
 - `POST /token`: authorization-code or refresh-token exchange.
 - `POST /mcp`, `GET /mcp`, `DELETE /mcp`: authenticated MCP Streamable HTTP session operations.
+- `/activity/*`: optional Basic-authenticated, read-only browser activity UI and API when `ACTIVITY_PASSWORD` is configured.
 
 ## Configuration
 
@@ -55,7 +56,7 @@ Redirect configuration:
 - `OAUTH_REDIRECT_URI`: optional exact callback URI.
 - `OAUTH_REDIRECT_URI_ALLOWLIST`: comma-separated callback rules. Bare entries and `exact:` entries match exactly; `prefix:` entries match by string prefix. Configure only trusted callback destinations.
 
-Optional settings: `PORT` (defaults to `3000`), `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), and `TOOL_LOG_MAX_CALLS` (defaults to `10000`). Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. The server listens on `0.0.0.0` and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
+Optional settings: `PORT` (defaults to `3000`), `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), `TOOL_LOG_MAX_CALLS` (defaults to `10000`), and `ACTIVITY_PASSWORD`. Tool payload retention is count-based: once the payload count exceeds the configured maximum, the oldest complete call payloads are removed while `index.jsonl` remains append-only. `ACTIVITY_PASSWORD` enables `/activity/*`; the fixed Basic Auth username is `activity`. The server listens on `0.0.0.0` in remote mode and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
 
 Command lookup uses a pinned PATH prefix. `~/.mcp-shell/bin` is always the first entry and is the user override layer; this repository's `bin/` directory is always second and is the repository default/guardrail layer. The remaining PATH follows afterward. The prefix is normalized again at child-process spawn boundaries so Pi, LSP configuration, or other environment rewriting cannot move those two entries behind another directory. User overrides intentionally take precedence over repository wrappers, so this mechanism is a customization and guardrail layer, not a security boundary against an authorized caller.
 
@@ -69,7 +70,7 @@ Install dependencies with `npm install`, then run the TypeScript entry point wit
 npx tsx mcp-shell.ts
 ```
 
-There is no configured `start` or `build` script in `package.json`. Run the automated tests with `npm test` and the TypeScript check with `npm run typecheck`. No README or TypeScript project configuration is present at the time this document was written.
+There is no configured `start` or `build` script in `package.json`. Run the automated tests with `npm test` and the TypeScript check with `npm run typecheck`. Project usage is documented in `README.md`.
 
 ## Current Boundaries
 

@@ -29,6 +29,10 @@ The meaningful protected asset is the process user's host authority, not merely 
 
 A network-reachable mcp-shell endpoint requires authentication before MCP requests reach session handling. The current implementation uses bearer tokens issued by its built-in OAuth flow.
 
+The activity browser is a separate authority surface on the same listener. `/activity/*` uses HTTP Basic authentication with an activity-specific password and grants read-only access to observability data. Activity credentials are not accepted by `/mcp`, and the browser does not receive an MCP bearer token.
+
+Application-local brute-force tracking is not part of this boundary. Public-edge rate limiting or abuse controls belong to the upstream ingress. HTTPS remains mandatory for public activity access because HTTP Basic credentials otherwise cross the network in replayable form.
+
 ## Local Rule
 
 The local no-OAuth profile is safe only under a stronger placement invariant: the server binds exclusively to `127.0.0.1`. Connection mode encodes this pair atomically rather than exposing independent “bind anywhere” and “disable auth” switches that can form an unsafe combination.
@@ -47,4 +51,6 @@ Pinned wrappers are resource/ergonomic guardrails. Because user overrides intent
 
 ## Secrets and Logs
 
-OAuth client secret, administrator password, access tokens, refresh tokens, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.
+OAuth client secret, administrator password, access tokens, refresh tokens, activity password, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.
+
+The activity password is independent from the MCP OAuth client secret and owner authorization password. Activity responses are not cacheable, cross-origin API access is not enabled, and untrusted tool content is rendered as text rather than executable markup.

@@ -59,33 +59,19 @@ Control: store logs under owner-controlled local paths with restrictive permissi
 - **Exit criteria:** metadata growth is bounded or intentionally archived, old payload references have explicit semantics, and operators can state how metadata is created, retained, archived, and retired.
 - **Priority:** medium; growth is already observable, but the correct retention semantics require an explicit product/operational decision.
 
-## Payload-Retention Selection Cost Scales With Configured History
+## Million-Scale Payload Retention Exceeds the Current Retention Model
 
-- **Root cause:** steady-state overflow handling finds the oldest retained payload with work proportional to the configured retained-payload count.
-- **Primary cost dimension:** runtime efficiency.
-- **Current cost:** at the default 10,000-call limit the in-memory work is small, but increasing `TOOL_LOG_MAX_CALLS` to obtain materially longer history also increases per-overflow CPU work linearly.
-- **Evidence:** the observed workload retained roughly 10,000 payloads for only about 25 hours, creating a credible reason for operators to raise the configured limit substantially.
-- **Cost mechanism:** retention history size and hot-path selection cost are coupled even though the user-facing requirement is only to evict the oldest payload.
-- **Reachable better state:** use an ordered runtime structure only if measurement shows the linear scan becoming material, reducing oldest-selection/update cost without reintroducing filesystem scans.
-- **Governing constraint:** normal retention enforcement should remain independent of filesystem directory size, and increasing legitimate history depth should not create disproportionate hot-path cost.
-- **Scope discovery:** benchmark retention enforcement across realistic call rates and configured limits before changing the data structure; include concurrent completion behavior and restart rebuild cost.
-- **Repair direction:** establish a performance threshold, then replace linear oldest selection with an ordered structure if that threshold is crossed.
-- **Exit criteria:** either measurements show the current approach remains immaterial across supported retention sizes, or the selected structure keeps steady-state retention cost acceptably bounded.
-- **Priority:** low-to-medium; credible scaling pressure exists, but current measurements do not yet justify extra data-structure complexity.
-
-## Tool-Log Configuration Has More Than One Interpretation Boundary
-
-- **Root cause:** server configuration knows about tool-log settings while the logging subsystem also reads and validates the corresponding environment variables directly.
-- **Primary cost dimension:** maintainability and test isolation.
-- **Current cost:** configuration semantics and logger lifecycle are partially implicit; tests mutate process-global environment state, and future configuration changes must keep multiple interpretation points aligned.
-- **Evidence:** the retention work required deriving logger identity from `TOOL_LOG_DIR` and `TOOL_LOG_MAX_CALLS` inside the logging module while those settings are also represented in server configuration/template handling.
-- **Cost mechanism:** one conceptual configuration rule has multiple maintained interpretation points instead of one resolved authority passed to consumers.
-- **Reachable better state:** resolve and validate tool-log configuration once at the application configuration boundary and inject the resolved values into an owned logging/retention instance.
-- **Governing constraint:** environment parsing and defaulting for one setting should have one authority; downstream components consume resolved configuration rather than reinterpret its source.
-- **Scope discovery:** inspect configuration loading, application composition, logger construction/lifetime, tests, and deployment templates before moving ownership.
-- **Repair direction:** perform this as a dedicated configuration-boundary refactor rather than coupling it to retention behavior changes.
-- **Exit criteria:** tool-log settings are parsed/defaulted in one place, logging receives resolved configuration explicitly, and tests no longer require process-global environment mutation for logger behavior.
-- **Priority:** low; the current system works, but the duplicated authority raises future change and testing cost.
+- **Root cause:** payload retention is still organized as one filesystem directory plus an in-memory filename set whose oldest-entry selection cost grows with retained payload count, while the supported configuration now permits million-call retention in actual operation.
+- **Primary cost dimension:** runtime efficiency and operability.
+- **Current cost:** the current deployment is configured with `TOOL_LOG_MAX_CALLS=1000000`. At that scale, restart must enumerate a very large payload directory, the process retains a very large filename set, and each overflow eviction performs work proportional to retained history to identify the oldest payload. The single-directory layout also inherits filesystem costs at very high file counts.
+- **Evidence:** on 2026-10-06 the active operator configuration was verified at one million retained payloads. Earlier observed usage filled roughly 10,000 payloads in about 25 hours, so this scale increase reflects a real history requirement rather than a speculative setting.
+- **Cost mechanism:** user-visible history depth, startup filesystem enumeration, steady-state oldest selection, memory used for retention bookkeeping, and single-directory file count all scale together even though only ordered oldest-first eviction is required.
+- **Reachable better state:** retain the existing durable payload semantics while introducing a retention representation whose steady-state oldest selection is O(1) or O(log N), and evaluate directory sharding or another bounded filesystem layout using measured startup and filesystem behavior at supported retention sizes.
+- **Governing constraint:** increasing legitimate payload history must not cause disproportionate per-call work or uncontrolled filesystem-directory scaling; steady-state retention must remain independent of rescanning the payload directory.
+- **Scope discovery:** measure startup enumeration, retention-memory footprint, oldest-selection cost, concurrent out-of-order completion, and filesystem behavior across realistic retained counts up to the configured operational scale before choosing the replacement.
+- **Repair direction:** treat selection structure and filesystem layout as one retention-model problem rather than patching individual slow paths. Preserve oldest-by-start-order semantics and the existing failure-isolation guarantees.
+- **Exit criteria:** supported retention sizes have bounded steady-state eviction cost, acceptable restart cost and memory use, and a filesystem layout whose behavior has been validated at the declared scale.
+- **Priority:** high; the deployment has already crossed from the original 10,000-call operating scale to one million retained payloads.
 
 ## Search Wrappers Can Be Bypassed Deliberately
 

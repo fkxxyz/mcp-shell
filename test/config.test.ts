@@ -36,12 +36,22 @@ test("loadConfig accepts local mode without remote OAuth configuration", async (
 
     const configDir = join(home, ".mcp-shell");
     await mkdir(configDir, { recursive: true });
-    await writeFile(join(configDir, "env"), "MODE=local\nPORT=4312\n", "utf8");
+    await writeFile(join(configDir, "env"), [
+      "MODE=local",
+      "PORT=4312",
+      "ACTIVITY_PASSWORD=dashboard-secret",
+      "TOOL_LOG_DIR=logs",
+      "TOOL_LOG_MAX_CALLS=123",
+      "",
+    ].join("\n"), "utf8");
 
     const config = await loadConfig();
     assert.equal(config.mode, "local");
     assert.equal(config.port, 4312);
     assert.equal(config.paths.shellsDbFile, join(configDir, "shells.db"));
+    assert.equal(config.activityPassword, "dashboard-secret");
+    assert.equal(config.toolLogs.dir, join(configDir, "logs"));
+    assert.equal(config.toolLogs.maxCalls, 123);
     assert.equal("publicBaseUrl" in config, false);
     assert.equal("oauth" in config, false);
   } finally {

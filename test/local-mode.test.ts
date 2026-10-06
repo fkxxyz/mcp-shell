@@ -17,6 +17,10 @@ function makeLocalConfig(configDir: string): LocalAppConfig {
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",
     },
+    toolLogs: {
+      dir: join(configDir, "tool-logs"),
+      maxCalls: 10_000,
+    },
     paths: {
       configDir,
       envFile: join(configDir, "env"),
@@ -77,6 +81,10 @@ test("remote mode keeps all-interface binding and bearer-protected /mcp", async 
   const base = makeConfig();
   const config: RemoteAppConfig = {
     ...base,
+    toolLogs: {
+      dir: join(dir, "tool-logs"),
+      maxCalls: 10_000,
+    },
     paths: {
       ...base.paths,
       configDir: dir,

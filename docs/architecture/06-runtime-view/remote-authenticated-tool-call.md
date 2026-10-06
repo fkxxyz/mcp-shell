@@ -62,13 +62,14 @@ The Shell is not owned by the MCP transport. The same root can have multiple ind
 1. `/mcp` resolves the transport from the session ID.
 2. Tool-log context carries the session and bearer-derived actor fingerprint.
 3. The MCP SDK dispatches the selected registered tool.
-4. A Shell-aware tool resolves its `shell_id` through `ShellStore`; unknown IDs fail. Relative operations use the resolved Shell `cwd`.
-5. `recordToolCall` records start time and input, runs the tool, then persists either output or serialized error.
-6. Before the first payload write for the active log-directory/retention configuration, payload retention scans `calls/` once, reconciles retained payloads and orphaned tool-log temporary files, and establishes runtime retention state. Initialization completes before new payloads are renamed into the directory.
-7. After a payload is atomically renamed into its final path, index persistence and retention enforcement are both attempted. A final payload remains enrolled in retention even when index persistence fails. Concurrent retention updates are serialized, the configured payload limit is enforced oldest-first, and steady-state calls do not rescan `calls/`; process restart rebuilds retention state from disk.
-8. The tool result or tool error is returned through the MCP transport.
+4. A Shell-aware tool enters the shared invocation helper, which resolves its `shell_id` through `ShellStore`; unknown IDs fail without falling back to a process working directory.
+5. `ToolCallRecorder` publishes the running call to the bounded activity projection before executing the tool.
+6. Relative operations use the resolved Shell `cwd`.
+7. After execution, `ToolLogStore` attempts to persist the completed success/error record and enforce payload retention.
+8. `ToolCallRecorder` publishes the completed activity state, including whether full payload detail was retained.
+9. The original tool result or original tool error is returned through the MCP transport.
 
-Logging persistence failure is written to stderr and does not convert a successful host action into a failed MCP tool result.
+Logging persistence or activity-publication failure is reported but does not convert a successful host action into a failed MCP tool result and does not replace the original tool error.
 
 ## Session End and Process Shutdown
 

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import type { RemoteAppConfig } from "../config.js";
-import { toolLogActorFromToken } from "../tool-logs.js";
+import { toolLogActorFromToken } from "../observability/tool-call-recorder.js";
 import { OAuthService } from "./oauth-service.js";
 
 export function createRequireBearer(config: RemoteAppConfig, oauth: OAuthService) {

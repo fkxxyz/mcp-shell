@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { withToolLogContext } from "../tool-logs.js";
+import { withToolLogContext } from "../observability/tool-call-recorder.js";
 import { McpSessionManager } from "./session-manager.js";
 
 export function createMcpRouter(sessions: McpSessionManager): Router {
