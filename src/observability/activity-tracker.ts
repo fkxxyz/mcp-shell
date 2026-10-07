@@ -1,12 +1,17 @@
+import { deriveActivityPresence } from "./activity-policy.js";
 import type {
   FinishedToolCallSummary,
   RunningToolCall,
   ToolCallSummary,
 } from "./tool-call.js";
 
-export type ActivityEvent =
-  | { type: "tool_call.started"; call: ToolCallSummary }
-  | { type: "tool_call.finished"; call: ToolCallSummary };
+export type ActivityEvent = {
+  type: "tool_call.started" | "tool_call.finished";
+  call: ToolCallSummary;
+  serverTime: number;
+  workspaceActivity: Pick<WorkspaceSnapshot, "cwd" | "lastEventAt" | "runningCallCount"> | null;
+  shellActivity: ShellActivitySnapshot | null;
+};
 
 export type WorkspaceSnapshot = {
   cwd: string;
@@ -22,6 +27,10 @@ export type WorkspaceShellActivity = {
   runningCallCount: number;
 };
 
+export type ShellActivitySnapshot = WorkspaceShellActivity & {
+  cwd: string;
+};
+
 export type ActivitySnapshot = {
   serverTime: number;
   workspaces: WorkspaceSnapshot[];
@@ -34,14 +43,17 @@ type WorkspaceState = {
   recent: ToolCallSummary[];
 };
 
+type ShellActivityState = ShellActivitySnapshot;
+
 export class ActivityTracker {
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly running = new Map<string, ToolCallSummary>();
   private readonly completed: ToolCallSummary[] = [];
   private readonly byId = new Map<string, ToolCallSummary>();
+  private readonly shellActivity = new Map<number, ShellActivityState>();
   private readonly subscribers = new Set<ActivityFeed>();
-
   private readonly maxRecentPerWorkspace: number;
+  private lastPresencePruneAt = 0;
 
   constructor(
     private readonly maxCompleted: number,
@@ -53,6 +65,18 @@ export class ActivityTracker {
 
   bootstrap(calls: FinishedToolCallSummary[]): void {
     for (const call of calls) this.applyFinished(call, false);
+  }
+
+  bootstrapShellActivity(shells: ShellActivitySnapshot[]): void {
+    for (const shell of shells) {
+      const existing = this.shellActivity.get(shell.shellId);
+      if (!existing || shell.lastEventAt > existing.lastEventAt) {
+        this.shellActivity.set(shell.shellId, { ...shell, runningCallCount: 0 });
+      }
+
+      const workspace = this.workspace(shell.cwd);
+      workspace.lastEventAt = Math.max(workspace.lastEventAt, shell.lastEventAt);
+    }
   }
 
   started(call: RunningToolCall): void {
@@ -69,7 +93,9 @@ export class ActivityTracker {
       workspace.lastEventAt = Math.max(workspace.lastEventAt, call.startedAt);
     }
 
-    this.publish({ type: "tool_call.started", call: cloneSummary(summary) });
+    this.applyShellStarted(summary);
+    this.maybePrunePresence(call.startedAt);
+    this.publish(this.lifecycleEvent("tool_call.started", summary));
   }
 
   finished(call: FinishedToolCallSummary): void {
@@ -80,18 +106,17 @@ export class ActivityTracker {
     if (callIds.length === 0) return;
     const evicted = new Set(callIds);
     for (const summary of this.completed) {
-      if (evicted.has(summary.id)) {
-        summary.payloadAvailable = false;
-      }
+      if (evicted.has(summary.id)) summary.payloadAvailable = false;
     }
   }
 
   snapshot(): ActivitySnapshot {
+    const serverTime = Date.now();
+    this.prunePresence(serverTime);
     const recentShellsByWorkspace = this.recentShellActivity();
     const workspaces = [...this.workspaces.values()]
       .map((workspace) => {
-        const running = [...workspace.running.values()]
-          .sort(compareRunningCalls);
+        const running = [...workspace.running.values()].sort(compareRunningCalls);
         const completed = [...workspace.recent].sort(compareCompletedCalls);
         const recentCalls = [...running, ...completed]
           .slice(0, this.maxRecentPerWorkspace)
@@ -106,48 +131,7 @@ export class ActivityTracker {
       })
       .sort((a, b) => b.lastEventAt - a.lastEventAt || a.cwd.localeCompare(b.cwd));
 
-    return {
-      serverTime: Date.now(),
-      workspaces,
-    };
-  }
-
-  private recentShellActivity(): Map<string, WorkspaceShellActivity[]> {
-    const byWorkspace = new Map<string, Map<number, WorkspaceShellActivity>>();
-
-    const apply = (call: ToolCallSummary, running: boolean) => {
-      if (!call.cwd || call.shellId == null) return;
-      let shells = byWorkspace.get(call.cwd);
-      if (!shells) {
-        shells = new Map();
-        byWorkspace.set(call.cwd, shells);
-      }
-
-      const eventAt = running ? call.startedAt : (call.finishedAt ?? call.startedAt);
-      const existing = shells.get(call.shellId);
-      if (existing) {
-        existing.lastEventAt = Math.max(existing.lastEventAt, eventAt);
-        if (running) existing.runningCallCount += 1;
-      } else {
-        shells.set(call.shellId, {
-          shellId: call.shellId,
-          lastEventAt: eventAt,
-          runningCallCount: running ? 1 : 0,
-        });
-      }
-    };
-
-    for (const call of this.completed) apply(call, false);
-    for (const call of this.running.values()) apply(call, true);
-
-    return new Map(
-      [...byWorkspace].map(([cwd, shells]) => [
-        cwd,
-        [...shells.values()].sort(
-          (a, b) => b.lastEventAt - a.lastEventAt || b.shellId - a.shellId,
-        ),
-      ]),
-    );
+    return { serverTime, workspaces };
   }
 
   openFeed(): { snapshot: ActivitySnapshot; feed: ActivityFeed } {
@@ -163,9 +147,33 @@ export class ActivityTracker {
     return call ? cloneSummary(call) : undefined;
   }
 
+  getShellActivity(shellId: number): ShellActivitySnapshot | undefined {
+    const shell = this.shellActivity.get(shellId);
+    return shell ? { ...shell } : undefined;
+  }
+
   close(): void {
     for (const subscriber of [...this.subscribers]) subscriber.close();
     this.subscribers.clear();
+  }
+
+  private recentShellActivity(): Map<string, WorkspaceShellActivity[]> {
+    const byWorkspace = new Map<string, WorkspaceShellActivity[]>();
+
+    for (const shell of this.shellActivity.values()) {
+      const shells = byWorkspace.get(shell.cwd) ?? [];
+      shells.push({
+        shellId: shell.shellId,
+        lastEventAt: shell.lastEventAt,
+        runningCallCount: shell.runningCallCount,
+      });
+      byWorkspace.set(shell.cwd, shells);
+    }
+
+    for (const shells of byWorkspace.values()) {
+      shells.sort((a, b) => b.lastEventAt - a.lastEventAt || b.shellId - a.shellId);
+    }
+    return byWorkspace;
   }
 
   private applyFinished(call: FinishedToolCallSummary, publish: boolean): void {
@@ -209,12 +217,62 @@ export class ActivityTracker {
       if (recentIndex >= 0) workspace.recent.splice(recentIndex, 1);
       workspace.recent.push(summary);
       workspace.recent.sort(compareCompletedCalls);
-      if (workspace.recent.length > this.maxRecentPerWorkspace) workspace.recent.length = this.maxRecentPerWorkspace;
+      if (workspace.recent.length > this.maxRecentPerWorkspace) {
+        workspace.recent.length = this.maxRecentPerWorkspace;
+      }
     } else if (existing?.cwd) {
       this.workspaces.get(existing.cwd)?.running.delete(call.id);
     }
 
-    if (publish) this.publish({ type: "tool_call.finished", call: cloneSummary(summary) });
+    this.applyShellFinished(existing, summary);
+    this.maybePrunePresence(call.finishedAt);
+    if (publish) this.publish(this.lifecycleEvent("tool_call.finished", summary));
+  }
+
+  private lifecycleEvent(type: ActivityEvent["type"], call: ToolCallSummary): ActivityEvent {
+    const workspace = call.cwd ? this.workspaces.get(call.cwd) : undefined;
+    const shell = call.shellId == null ? undefined : this.shellActivity.get(call.shellId);
+    return {
+      type,
+      call: cloneSummary(call),
+      serverTime: Date.now(),
+      workspaceActivity: workspace ? {
+        cwd: workspace.cwd,
+        lastEventAt: workspace.lastEventAt,
+        runningCallCount: workspace.running.size,
+      } : null,
+      shellActivity: shell ? { ...shell } : null,
+    };
+  }
+
+  private applyShellStarted(call: ToolCallSummary): void {
+    if (call.shellId == null || !call.cwd) return;
+    const shell = this.shellActivity.get(call.shellId) ?? {
+      shellId: call.shellId,
+      cwd: call.cwd,
+      lastEventAt: 0,
+      runningCallCount: 0,
+    };
+    shell.cwd = call.cwd;
+    shell.lastEventAt = Math.max(shell.lastEventAt, call.startedAt);
+    shell.runningCallCount += 1;
+    this.shellActivity.set(call.shellId, shell);
+  }
+
+  private applyShellFinished(previous: ToolCallSummary | undefined, call: ToolCallSummary): void {
+    if (call.shellId == null || !call.cwd) return;
+    const shell = this.shellActivity.get(call.shellId) ?? {
+      shellId: call.shellId,
+      cwd: call.cwd,
+      lastEventAt: 0,
+      runningCallCount: 0,
+    };
+    shell.cwd = call.cwd;
+    shell.lastEventAt = Math.max(shell.lastEventAt, call.finishedAt ?? call.startedAt);
+    if (previous?.status === "running" && previous.shellId === call.shellId) {
+      shell.runningCallCount = Math.max(0, shell.runningCallCount - 1);
+    }
+    this.shellActivity.set(call.shellId, shell);
   }
 
   private retireFromWorkspace(call: ToolCallSummary): void {
@@ -225,8 +283,37 @@ export class ActivityTracker {
     const index = workspace.recent.findIndex((item) => item.id === call.id);
     if (index >= 0) workspace.recent.splice(index, 1);
 
-    if (workspace.running.size === 0 && workspace.recent.length === 0) {
+    if (
+      workspace.running.size === 0 &&
+      workspace.recent.length === 0 &&
+      !deriveActivityPresence(0, workspace.lastEventAt, Date.now()).active
+    ) {
       this.workspaces.delete(call.cwd);
+    }
+  }
+
+  private maybePrunePresence(now: number): void {
+    if (now - this.lastPresencePruneAt < 60_000) return;
+    this.prunePresence(now);
+  }
+
+  private prunePresence(now: number): void {
+    this.lastPresencePruneAt = now;
+
+    for (const [shellId, shell] of this.shellActivity) {
+      if (!deriveActivityPresence(shell.runningCallCount, shell.lastEventAt, now).active) {
+        this.shellActivity.delete(shellId);
+      }
+    }
+
+    for (const [cwd, workspace] of this.workspaces) {
+      if (
+        workspace.running.size === 0 &&
+        workspace.recent.length === 0 &&
+        !deriveActivityPresence(0, workspace.lastEventAt, now).active
+      ) {
+        this.workspaces.delete(cwd);
+      }
     }
   }
 

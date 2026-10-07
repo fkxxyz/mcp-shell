@@ -34,6 +34,82 @@ test("openFeed snapshot and queued live event form one lossless handoff", async 
   tracker.close();
 });
 
+test("queued lifecycle events freeze presence at publication time", async () => {
+  const tracker = new ActivityTracker(100);
+  const opened = tracker.openFeed();
+  const startedAt = Date.now();
+
+  tracker.started({
+    id: "race",
+    tool: "bash",
+    shellId: 7,
+    cwd: "/workspace",
+    startedAt,
+  });
+  tracker.finished({
+    id: "race",
+    tool: "bash",
+    shellId: 7,
+    cwd: "/workspace",
+    startedAt,
+    finishedAt: startedAt + 10,
+    durationMs: 10,
+    status: "success",
+    payloadAvailable: true,
+  });
+
+  const started = await opened.feed.next();
+  const finished = await opened.feed.next();
+  assert.equal(started?.type, "tool_call.started");
+  assert.equal(started?.workspaceActivity?.runningCallCount, 1);
+  assert.equal(started?.shellActivity?.runningCallCount, 1);
+  assert.equal(finished?.type, "tool_call.finished");
+  assert.equal(finished?.workspaceActivity?.runningCallCount, 0);
+  assert.equal(finished?.shellActivity?.runningCallCount, 0);
+  assert.equal(finished?.shellActivity?.lastEventAt, startedAt + 10);
+
+  opened.feed.close();
+  tracker.close();
+});
+
+test("Shell running count tracks concurrent calls independently", () => {
+  const tracker = new ActivityTracker(100);
+  const startedAt = Date.now();
+
+  tracker.started({ id: "a", tool: "bash", shellId: 9, cwd: "/workspace", startedAt });
+  tracker.started({ id: "b", tool: "bash", shellId: 9, cwd: "/workspace", startedAt: startedAt + 1 });
+  assert.equal(tracker.getShellActivity(9)?.runningCallCount, 2);
+
+  tracker.finished({
+    id: "a",
+    tool: "bash",
+    shellId: 9,
+    cwd: "/workspace",
+    startedAt,
+    finishedAt: startedAt + 2,
+    durationMs: 2,
+    status: "success",
+    payloadAvailable: true,
+  });
+  assert.equal(tracker.getShellActivity(9)?.runningCallCount, 1);
+
+  tracker.finished({
+    id: "b",
+    tool: "bash",
+    shellId: 9,
+    cwd: "/workspace",
+    startedAt: startedAt + 1,
+    finishedAt: startedAt + 3,
+    durationMs: 2,
+    status: "success",
+    payloadAvailable: true,
+  });
+  assert.equal(tracker.getShellActivity(9)?.runningCallCount, 0);
+  assert.equal(tracker.getShellActivity(9)?.lastEventAt, startedAt + 3);
+
+  tracker.close();
+});
+
 test("activity feed closes when pending events exceed its bounded queue", async () => {
   const tracker = new ActivityTracker(100, 10, 2);
   const opened = tracker.openFeed();
@@ -85,14 +161,15 @@ test("completed-call retention also retires stale workspace projection state", (
 
 test("snapshot keeps shell activity facts beyond the per-workspace recent-call window", () => {
   const tracker = new ActivityTracker(100, 2);
+  const base = Date.now();
 
   tracker.finished({
     id: "shell-1",
     tool: "read",
     shellId: 1,
     cwd: "/workspace",
-    startedAt: 1,
-    finishedAt: 2,
+    startedAt: base + 1,
+    finishedAt: base + 2,
     durationMs: 1,
     status: "success",
     payloadAvailable: true,
@@ -102,8 +179,8 @@ test("snapshot keeps shell activity facts beyond the per-workspace recent-call w
     tool: "read",
     shellId: 2,
     cwd: "/workspace",
-    startedAt: 3,
-    finishedAt: 4,
+    startedAt: base + 3,
+    finishedAt: base + 4,
     durationMs: 1,
     status: "success",
     payloadAvailable: true,
@@ -113,8 +190,8 @@ test("snapshot keeps shell activity facts beyond the per-workspace recent-call w
     tool: "edit",
     shellId: 2,
     cwd: "/workspace",
-    startedAt: 5,
-    finishedAt: 6,
+    startedAt: base + 5,
+    finishedAt: base + 6,
     durationMs: 1,
     status: "success",
     payloadAvailable: true,

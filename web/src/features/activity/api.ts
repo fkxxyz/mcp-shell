@@ -3,12 +3,11 @@ import type {
   ActivitySnapshotDto,
   ShellCallsDto,
   ToolCallDetailDto,
-  ToolCallSummaryDto,
   WorkspaceShellsDto,
-} from "../../../../src/contracts/activity";
+} from "../../../../src/contracts/observability";
 import { requestJson } from "../../lib/api-client";
 
-const API_ROOT = "/api";
+const API_ROOT = "/api/v1";
 
 export const activityQueryKeys = {
   workspaceShells: (cwd: string) => ["workspace-shells", cwd] as const,
@@ -20,7 +19,7 @@ export function openActivityStream(handlers: {
   onOpen(): void;
   onError(): void;
   onSnapshot(snapshot: ActivitySnapshotDto): void;
-  onCall(call: ToolCallSummaryDto): void;
+  onCall(event: ActivityCallEventDto): void;
 }): () => void {
   const source = new EventSource(`${API_ROOT}/activity/stream`);
 
@@ -30,7 +29,7 @@ export function openActivityStream(handlers: {
     handlers.onSnapshot(JSON.parse(event.data) as ActivitySnapshotDto);
   });
   const onCall = (event: MessageEvent<string>) => {
-    handlers.onCall((JSON.parse(event.data) as ActivityCallEventDto).call);
+    handlers.onCall(JSON.parse(event.data) as ActivityCallEventDto);
   };
   source.addEventListener("tool_call.started", onCall);
   source.addEventListener("tool_call.finished", onCall);

@@ -1,4 +1,4 @@
-import type { ToolCallSummaryDto } from "../../../../src/contracts/activity";
+import type { ToolCallSummaryDto } from "../../../../src/contracts/observability";
 
 const ARG_PRIORITY_GROUPS = [
   ["name"],

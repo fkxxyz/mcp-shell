@@ -9,7 +9,7 @@ import type { FinishedToolCallSummary, ToolCallRecord } from "./tool-call.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const RETENTION_BATCH_SIZE = 1_000;
 
 export type ToolHistoryCursor = {
@@ -34,6 +34,12 @@ export type ToolCallReadResult =
   | { kind: "not_found" }
   | { kind: "payload_missing" };
 
+export type ShellActivityRecord = {
+  shellId: number;
+  cwd: string;
+  lastEventAt: number;
+};
+
 type ToolHistoryRow = {
   history_id: number;
   id: string;
@@ -55,11 +61,12 @@ type RetentionVictim = {
   payload_path: string;
 };
 
-export class ToolHistoryStore {
+export class ObservabilityStore {
   private readonly dbFile: string;
   private readonly payloadRoot: string;
   private db: DatabaseSync | undefined;
   private insertCall: StatementSync | undefined;
+  private upsertShellActivity: StatementSync | undefined;
   private initialization: Promise<void> | undefined;
   private closed = false;
   private retainedCount = 0;
@@ -73,7 +80,7 @@ export class ToolHistoryStore {
   }
 
   initialize(): Promise<void> {
-    if (this.closed) return Promise.reject(new Error("Tool history store is closed"));
+    if (this.closed) return Promise.reject(new Error("Observability store is closed"));
     if (this.initialization === undefined) {
       this.initialization = this.initializeOnce();
     }
@@ -95,6 +102,13 @@ export class ToolHistoryStore {
       db.exec("BEGIN IMMEDIATE");
       try {
         this.requireInsertCall().run(...metadataParams(record, inputPreview, payloadPath, compressed.byteLength));
+        if (record.shell_id != null && record.cwd) {
+          this.requireUpsertShellActivity().run(
+            record.shell_id,
+            record.cwd,
+            Date.parse(record.finished_at),
+          );
+        }
         const nextCount = this.retainedCount + 1;
         const excess = Math.max(0, nextCount - this.maxCalls);
         victims = this.deleteOldestRows(excess);
@@ -166,8 +180,31 @@ export class ToolHistoryStore {
     };
   }
 
-  latestShellCall(shellId: number): FinishedToolCallSummary | undefined {
-    return this.listShellCalls(shellId, 1).items[0];
+  getShellActivity(shellId: number): ShellActivityRecord | undefined {
+    const row = this.requireDb().prepare(`
+      SELECT shell_id, cwd, last_event_at_ms
+      FROM shell_activity
+      WHERE shell_id = ?
+    `).get(shellId) as { shell_id: number; cwd: string; last_event_at_ms: number } | undefined;
+    return row ? {
+      shellId: row.shell_id,
+      cwd: row.cwd,
+      lastEventAt: row.last_event_at_ms,
+    } : undefined;
+  }
+
+  listShellActivitySince(sinceMs: number): ShellActivityRecord[] {
+    const rows = this.requireDb().prepare(`
+      SELECT shell_id, cwd, last_event_at_ms
+      FROM shell_activity
+      WHERE last_event_at_ms >= ?
+      ORDER BY last_event_at_ms DESC, shell_id DESC
+    `).all(sinceMs) as Array<{ shell_id: number; cwd: string; last_event_at_ms: number }>;
+    return rows.map((row) => ({
+      shellId: row.shell_id,
+      cwd: row.cwd,
+      lastEventAt: row.last_event_at_ms,
+    }));
   }
 
   async readCall(callId: string): Promise<ToolCallReadResult> {
@@ -199,6 +236,7 @@ export class ToolHistoryStore {
 
   private closeDatabase(): void {
     this.insertCall = undefined;
+    this.upsertShellActivity = undefined;
     this.db?.close();
     this.db = undefined;
   }
@@ -215,11 +253,12 @@ export class ToolHistoryStore {
       this.initializeSchema(db);
       await chmod(this.dbFile, 0o600);
       this.prepareStatements(db);
-      await migrateLegacyToolLogs(
+      const legacyImport = await migrateLegacyToolLogs(
         this.logDir,
         db,
         (relativePath, compressed) => this.publishPayloadIfMissing(relativePath, compressed),
       );
+      if (legacyImport.imported > 0) this.backfillShellActivityFromHistory();
       this.retainedCount = Number(
         (db.prepare("SELECT COUNT(*) AS count FROM tool_calls").get() as { count: number }).count,
       );
@@ -241,8 +280,8 @@ export class ToolHistoryStore {
     const currentVersion = Number(
       (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
     );
-    if (currentVersion !== 0 && currentVersion !== SCHEMA_VERSION) {
-      throw new Error(`Unsupported tool history schema version: ${currentVersion}`);
+    if (currentVersion < 0 || currentVersion > SCHEMA_VERSION) {
+      throw new Error(`Unsupported observability schema version: ${currentVersion}`);
     }
 
     db.exec(`
@@ -270,8 +309,36 @@ export class ToolHistoryStore {
       CREATE INDEX IF NOT EXISTS tool_calls_shell_history
         ON tool_calls(shell_id, started_at_ms DESC, sequence DESC, id DESC);
 
-      PRAGMA user_version = ${SCHEMA_VERSION};
+      CREATE TABLE IF NOT EXISTS shell_activity (
+        shell_id INTEGER PRIMARY KEY,
+        cwd TEXT NOT NULL,
+        last_event_at_ms INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS shell_activity_recent
+        ON shell_activity(last_event_at_ms DESC, shell_id DESC);
     `);
+
+    if (currentVersion < 2) {
+      db.exec(`
+        INSERT OR REPLACE INTO shell_activity (shell_id, cwd, last_event_at_ms)
+        SELECT t.shell_id, t.cwd, t.finished_at_ms
+        FROM tool_calls AS t
+        WHERE t.shell_id IS NOT NULL
+          AND t.cwd IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tool_calls AS newer
+            WHERE newer.shell_id = t.shell_id
+              AND (
+                newer.finished_at_ms > t.finished_at_ms OR
+                (newer.finished_at_ms = t.finished_at_ms AND newer.history_id > t.history_id)
+              )
+          );
+      `);
+    }
+
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
   private prepareStatements(db: DatabaseSync): void {
@@ -283,6 +350,36 @@ export class ToolHistoryStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     this.insertCall = db.prepare(sql);
+    this.upsertShellActivity = db.prepare(`
+      INSERT INTO shell_activity (shell_id, cwd, last_event_at_ms)
+      VALUES (?, ?, ?)
+      ON CONFLICT(shell_id) DO UPDATE SET
+        cwd = excluded.cwd,
+        last_event_at_ms = excluded.last_event_at_ms
+      WHERE excluded.last_event_at_ms >= shell_activity.last_event_at_ms
+    `);
+  }
+
+  private backfillShellActivityFromHistory(): void {
+    const rows = this.requireDb().prepare(`
+      SELECT t.shell_id, t.cwd, t.finished_at_ms
+      FROM tool_calls AS t
+      WHERE t.shell_id IS NOT NULL
+        AND t.cwd IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM tool_calls AS newer
+          WHERE newer.shell_id = t.shell_id
+            AND (
+              newer.finished_at_ms > t.finished_at_ms OR
+              (newer.finished_at_ms = t.finished_at_ms AND newer.history_id > t.history_id)
+            )
+        )
+    `).all() as Array<{ shell_id: number; cwd: string; finished_at_ms: number }>;
+
+    for (const row of rows) {
+      this.requireUpsertShellActivity().run(row.shell_id, row.cwd, row.finished_at_ms);
+    }
   }
 
   private deleteOldestRows(count: number): RetentionVictim[] {
@@ -372,13 +469,18 @@ export class ToolHistoryStore {
   }
 
   private requireDb(): DatabaseSync {
-    if (!this.db) throw new Error("Tool history store is not initialized");
+    if (!this.db) throw new Error("Observability store is not initialized");
     return this.db;
   }
 
   private requireInsertCall(): StatementSync {
-    if (!this.insertCall) throw new Error("Tool history store is not initialized");
+    if (!this.insertCall) throw new Error("Observability store is not initialized");
     return this.insertCall;
+  }
+
+  private requireUpsertShellActivity(): StatementSync {
+    if (!this.upsertShellActivity) throw new Error("Observability store is not initialized");
+    return this.upsertShellActivity;
   }
 
 }

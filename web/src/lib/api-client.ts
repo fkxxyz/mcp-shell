@@ -1,4 +1,4 @@
-import type { ApiErrorDto } from "../../../src/contracts/activity";
+import type { ApiErrorDto } from "../../../src/contracts/observability";
 
 export class ApiError extends Error {
   constructor(

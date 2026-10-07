@@ -31,8 +31,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
       onOpen: () => setConnection("live"),
       onError: () => setConnection("reconnecting"),
       onSnapshot: (snapshot) => store.replaceSnapshot(snapshot),
-      onCall: (call) => {
-        store.applyCall(call);
+      onCall: (event) => {
+        store.applyCall(event);
+        const call = event.call;
         if (call.status === "running") return;
 
         if (call.shell_id != null) {

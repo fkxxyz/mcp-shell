@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
-import { ActivityQuery } from "../src/observability/activity-query.js";
+import { ObservabilityQuery } from "../src/observability/observability-query.js";
 import { ActivityTracker } from "../src/observability/activity-tracker.js";
 import {
   ToolCallRecorder,
   withToolLogContext,
 } from "../src/observability/tool-call-recorder.js";
 import type { ToolCallRecord } from "../src/observability/tool-call.js";
-import { ToolHistoryStore } from "../src/observability/tool-history-store.js";
+import { ObservabilityStore } from "../src/observability/observability-store.js";
 import { ShellStore } from "../src/shell-store.js";
 
 test("tool history preserves complete calls, durable previews, and exact retention", async () => {
@@ -98,7 +98,7 @@ test("concurrent completions preserve the exact retention limit", async () => {
 test("history survives restart with input previews and durable cursor pagination", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-reopen-"));
   let tracker = new ActivityTracker(10);
-  let store = new ToolHistoryStore(dir, 10);
+  let store = new ObservabilityStore(dir, 10);
   await store.initialize();
   let recorder = new ToolCallRecorder(store, tracker);
 
@@ -113,7 +113,7 @@ test("history survives restart with input previews and durable cursor pagination
     store.close();
     tracker.close();
 
-    store = new ToolHistoryStore(dir, 10);
+    store = new ObservabilityStore(dir, 10);
     await store.initialize();
     tracker = new ActivityTracker(10);
     recorder = new ToolCallRecorder(store, tracker);
@@ -165,11 +165,12 @@ test("legacy gzip payloads migrate once into sharded durable history", async () 
   await writeFile(join(callsDir, "malformed.json.gz"), gzipSync(Buffer.from("{not-json", "utf8")), { mode: 0o600 });
   await writeFile(join(dir, "index.jsonl"), "{legacy metadata}\n", "utf8");
 
-  const store = new ToolHistoryStore(dir, 10);
+  const store = new ObservabilityStore(dir, 10);
   try {
     await store.initialize();
     assert.equal(store.readRecent(10).length, 2);
     assert.deepEqual(store.readRecent(10)[0]!.inputPreview, { path: "new.ts" });
+    assert.equal(store.getShellActivity(11)?.lastEventAt, Date.parse(records[1]!.finished_at));
     assert.equal(await countPayloadFiles(dir), 2);
     await assert.rejects(() => readFile(join(dir, "index.jsonl")));
     await assert.rejects(() => readdir(callsDir));
@@ -178,10 +179,11 @@ test("legacy gzip payloads migrate once into sharded durable history", async () 
     assert.match(rejected[0]!, /^malformed\.json\.gz\..+\.rejected$/);
 
     store.close();
-    const reopened = new ToolHistoryStore(dir, 10);
+    const reopened = new ObservabilityStore(dir, 10);
     try {
       await reopened.initialize();
       assert.equal(reopened.readRecent(10).length, 2);
+      assert.equal(reopened.getShellActivity(11)?.lastEventAt, Date.parse(records[1]!.finished_at));
       assert.equal(await countPayloadFiles(dir), 2);
       assert.equal((await readdir(join(dir, "legacy-rejected"))).length, 1);
     } finally {
@@ -195,7 +197,7 @@ test("legacy gzip payloads migrate once into sharded durable history", async () 
 
 test("lower retention converges existing durable history on startup", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-prune-"));
-  let store = new ToolHistoryStore(dir, 5);
+  let store = new ObservabilityStore(dir, 5);
   let tracker = new ActivityTracker(5);
   let recorder = new ToolCallRecorder(store, tracker);
   try {
@@ -206,7 +208,7 @@ test("lower retention converges existing durable history on startup", async () =
     store.close();
     tracker.close();
 
-    store = new ToolHistoryStore(dir, 2);
+    store = new ObservabilityStore(dir, 2);
     tracker = new ActivityTracker(2);
     recorder = new ToolCallRecorder(store, tracker);
     await store.initialize();
@@ -225,7 +227,7 @@ test("durable Shell history remains queryable beyond the live activity window", 
   const shells = await ShellStore.open(dir, join(dir, "shells.db"));
   const shell = shells.create("/workspace");
   const otherShell = shells.create("/other-workspace");
-  const store = new ToolHistoryStore(join(dir, "tool-logs"), 10);
+  const store = new ObservabilityStore(join(dir, "tool-logs"), 10);
   const tracker = new ActivityTracker(1);
   const recorder = new ToolCallRecorder(store, tracker);
   await store.initialize();
@@ -240,7 +242,7 @@ test("durable Shell history remains queryable beyond the live activity window", 
 
     assert.equal(tracker.snapshot().workspaces[0]?.recentCalls.length, 1);
 
-    const query = new ActivityQuery(shells, store, tracker);
+    const query = new ObservabilityQuery(shells, store, tracker);
     const firstPage = query.listShellCalls(shell.id, 1);
     assert.ok(firstPage.next_cursor);
     assert.throws(
@@ -274,7 +276,7 @@ test("failed history initialization stays degraded for the process instead of re
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-init-failure-"));
   const dbPath = join(dir, "history.db");
   await mkdir(dbPath, { recursive: true });
-  const store = new ToolHistoryStore(dir, 10);
+  const store = new ObservabilityStore(dir, 10);
 
   try {
     await assert.rejects(() => store.initialize());
@@ -286,7 +288,7 @@ test("failed history initialization stays degraded for the process instead of re
       "the same process must retain the original failed initialization instead of silently retrying",
     );
 
-    const restarted = new ToolHistoryStore(dir, 10);
+    const restarted = new ObservabilityStore(dir, 10);
     try {
       await restarted.initialize();
       assert.deepEqual(restarted.readRecent(1), []);
@@ -302,7 +304,7 @@ test("failed history initialization stays degraded for the process instead of re
 test("history persistence failure never replaces tool success or the original tool error", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-failure-"));
   await mkdir(join(dir, "history.db"), { recursive: true });
-  const store = new ToolHistoryStore(dir, 10);
+  const store = new ObservabilityStore(dir, 10);
   const tracker = new ActivityTracker(10);
   const recorder = new ToolCallRecorder(store, tracker);
   const previousConsoleError = console.error;
@@ -335,13 +337,13 @@ async function withToolHistory(
   maxCalls: number,
   callback: (context: {
     dir: string;
-    store: ToolHistoryStore;
+    store: ObservabilityStore;
     tracker: ActivityTracker;
     recorder: ToolCallRecorder;
   }) => Promise<void>,
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-test-"));
-  const store = new ToolHistoryStore(dir, maxCalls);
+  const store = new ObservabilityStore(dir, maxCalls);
   const tracker = new ActivityTracker(maxCalls);
   const recorder = new ToolCallRecorder(store, tracker);
   await store.initialize();

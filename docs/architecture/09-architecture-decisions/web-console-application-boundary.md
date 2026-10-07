@@ -1,5 +1,5 @@
 ---
-summary: "Records the Web Console as a first-class same-origin SPA with explicit API, authentication, build, and future-mutation boundaries."
+summary: "Records the Web Console as a first-class same-origin SPA with explicit UI, authentication, build, and future-mutation boundaries."
 viewpoint: decision
 stakeholders:
   - architect
@@ -29,6 +29,8 @@ facets:
 
 Accepted and implemented architecture decision.
 
+The later **Observability API Boundary** decision supersedes this ADR's former browser-owned API decisions. This ADR is authoritative **only** for the Web Console SPA, its Basic-authenticated `/console/*` surface, frontend stack, and single-process build/deployment model. The versioned API, its authentication, and its compatibility contract belong exclusively to the Observability API Boundary decision.
+
 ## Context
 
 The original browser surface was a small static Activity dashboard implemented with HTML, CSS, and browser JavaScript under `/activity/*`. That was appropriate while the browser had one narrow read-only interaction model.
@@ -42,16 +44,14 @@ At the same time, mcp-shell remains a personal-host, single-process system. A se
 Introduce a first-class **Web Console** with these boundaries:
 
 - `/console/*` is the browser SPA namespace.
-- `/api/*` is the browser-facing JSON/SSE namespace.
-- `WEB_PASSWORD` enables both namespaces together; when absent, neither is mounted.
+- The Web Console consumes the Observability API governed by the **Observability API Boundary** decision; it does not own a separate browser API.
+- `WEB_PASSWORD` enables `/console/*`; when absent, the browser application is not mounted.
 - When the Web surface is enabled, `GET /` is a non-cacheable `302` convenience redirect to `/console/`; it is not part of the authenticated Web authority and remains absent when the Web surface is disabled.
-- Both namespaces use the same HTTP Basic Auth middleware. The fixed username remains `activity`; the configured password defines the authority.
+- The fixed Web Basic username remains `activity`; `WEB_PASSWORD` defines the browser authority. API credential acceptance belongs to the Observability API Boundary decision.
 - Web credentials are never accepted by `/mcp`, and MCP bearer credentials are not exposed to browser code.
 - The current Web authority is read-only observation. It can query Shell/log facts and subscribe to Activity events but cannot execute tools, mutate configuration, delete logs, or manage Shell lifecycle.
 
-Activity is the first Web Console feature, not the Web Console identity. Its live endpoint is `/api/activity/stream`; Shell and tool-call reads use resource-oriented paths such as `/api/shells/:shell_id/calls` and `/api/tool-calls/:call_id`.
-
-No API version segment is introduced while frontend and backend remain one repository, one release, and one deployment unit. Pagination cursors are opaque transport values so storage/order changes do not become browser contracts.
+Activity is the first Web Console feature, not the Web Console identity. API path/version, external-consumer compatibility, and read-only API authentication are governed by the Observability API Boundary ADR.
 
 ## Frontend Stack
 
@@ -98,7 +98,7 @@ SPA fallback applies only inside `/console`. Missing `/console/assets/*` files r
 
 The application root is only a browser-discovery entry point. It redirects to `/console/` rather than hosting the SPA itself, preserving the explicit Web namespace and avoiding deployment-specific redirect rules in reverse proxies.
 
-The HTML shell and browser API responses are `Cache-Control: no-store`. Content-hashed Vite assets may be cached as immutable for one year.
+The HTML shell is `Cache-Control: no-store`. Content-hashed Vite assets may be cached as immutable for one year. API cache policy belongs to the Observability API Boundary.
 
 ## Security Consequences
 
@@ -126,17 +126,12 @@ Rejected because mcp-shell already has the authoritative Node/Express backend an
 
 Rejected until client-owned state actually requires it. URL state, TanStack Query server state, and the narrow Activity live model cover current needs.
 
-### Version the browser API immediately
-
-Rejected because no independently released external API consumer exists. Add an explicit version only when compatibility across independently evolving consumers becomes a real requirement.
-
 ## Reassessment
 
 Reassess this decision if:
 
 - the Web Console gains mutation authority;
 - frontend/backend release lifecycles become independent;
-- external API consumers require compatibility guarantees;
 - SSR provides a demonstrated user benefit;
 - SSE is no longer sufficient for required bidirectional/live semantics; or
 - client-owned state grows beyond route state plus localized feature models.

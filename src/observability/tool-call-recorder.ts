@@ -8,7 +8,7 @@ import type {
   ToolLogContext,
 } from "./tool-call.js";
 import { serializeToolError } from "./tool-call.js";
-import type { ToolHistoryStore } from "./tool-history-store.js";
+import type { ObservabilityStore } from "./observability-store.js";
 
 export type RecordedCallContext = {
   tool: string;
@@ -37,7 +37,7 @@ export class ToolCallRecorder {
   private historyFailureReported = false;
 
   constructor(
-    private readonly logs: ToolHistoryStore,
+    private readonly logs: ObservabilityStore,
     private readonly activity: ActivityTracker,
   ) {}
 

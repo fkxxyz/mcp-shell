@@ -41,7 +41,7 @@ host tools
 
 Remote mode binds to `0.0.0.0`, requires `PUBLIC_BASE_URL` and OAuth secrets, publishes OAuth discovery routes, and protects `/mcp` with bearer authentication.
 
-The same listener may also serve the optional Web Console at `/console/*` and its read-only browser API at `/api/*`. Both namespaces use independent HTTP Basic authentication enabled by `WEB_PASSWORD`; that credential is not accepted by `/mcp`. Public remote use assumes HTTPS at the ingress because Basic credentials are replayable if transported in cleartext.
+The same listener may also serve the optional Web Console at `/console/*` and the independent read-only Observability API at `/api/v1/*`. `WEB_PASSWORD` enables the Console and its Basic credential is accepted by the API; `OBSERVABILITY_TOKEN` can enable Bearer API access without enabling the Console. The remote API is absent when neither read credential exists. Neither credential is accepted by `/mcp`. Public remote use assumes HTTPS at the ingress.
 
 ## Local
 
@@ -57,6 +57,8 @@ host tools
 ```
 
 The local profile supports clients on the same personal computer without public infrastructure. Its invariant is **loopback binding plus no OAuth**. It does not expose the no-auth endpoint on all interfaces.
+
+The read-only `/api/v1/*` Observability API is also mounted without an additional credential in local mode. This follows the same loopback trust boundary already required for the more-powerful unauthenticated `/mcp` endpoint. The Web Console remains independently opt-in through `WEB_PASSWORD`.
 
 ## Local Through Trusted Outbound Tunnel
 

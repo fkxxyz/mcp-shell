@@ -1,14 +1,21 @@
 import { once } from "node:events";
 import { Router, type Response } from "express";
-import type { ActivityTracker } from "../observability/activity-tracker.js";
+import type { ActivityTracker } from "../../observability/activity-tracker.js";
 import {
-  ActivityQuery,
-  ActivityQueryError,
-  toApiSummary,
-} from "../observability/activity-query.js";
+  ObservabilityQuery,
+  ObservabilityQueryError,
+} from "../../observability/observability-query.js";
 
-export function createActivityApiRouter(query: ActivityQuery, activity: ActivityTracker): Router {
+export function createObservabilityApiRouter(query: ObservabilityQuery, activity: ActivityTracker): Router {
   const router = Router();
+
+  router.get("/activity", (_req, res) => {
+    try {
+      return res.json(query.snapshot());
+    } catch (error) {
+      return handleQueryError(res, error);
+    }
+  });
 
   router.get("/activity/stream", (req, res) => {
     const opened = activity.openFeed();
@@ -38,7 +45,7 @@ export function createActivityApiRouter(query: ActivityQuery, activity: Activity
         while (!closed) {
           const event = await opened.feed.next();
           if (!event) break;
-          await writeEvent(res, event.type, { call: toApiSummary(event.call) });
+          await writeEvent(res, event.type, query.serializeCallEvent(event));
         }
       } catch (error) {
         if (!closed) console.error("Activity SSE stream failed:", error);
@@ -63,6 +70,18 @@ export function createActivityApiRouter(query: ActivityQuery, activity: Activity
       const before = typeof req.query.before === "string" && req.query.before ? req.query.before : undefined;
 
       return res.json(query.listWorkspaceShells(cwd, limit, before));
+    } catch (error) {
+      return handleQueryError(res, error);
+    }
+  });
+
+  router.get("/shells/:shellId/activity", (req, res) => {
+    try {
+      const shellId = parsePositiveInteger(req.params.shellId);
+      if (shellId === undefined) {
+        return sendError(res, 400, "invalid_request", "shellId must be a positive integer");
+      }
+      return res.json(query.getShellActivity(shellId));
     } catch (error) {
       return handleQueryError(res, error);
     }
@@ -108,10 +127,10 @@ function parsePositiveInteger(value: unknown): number | undefined {
 }
 
 function handleQueryError(res: Response, error: unknown) {
-  if (error instanceof ActivityQueryError) {
+  if (error instanceof ObservabilityQueryError) {
     return sendError(res, error.status, error.code, error.message);
   }
-  console.error("Activity API failed:", error);
+  console.error("Observability API failed:", error);
   return sendError(res, 500, "internal_error", "Internal server error");
 }
 

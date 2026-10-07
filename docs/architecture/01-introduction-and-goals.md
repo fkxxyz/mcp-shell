@@ -57,8 +57,9 @@ In scope:
 - remote OAuth-protected access;
 - local loopback-only access;
 - optional outbound tunneling from the local host to a trusted MCP client environment;
-- local persisted OAuth state and tool-call logs; and
-- an optional Basic-authenticated, read-only Web Console and browser API.
+- local persisted OAuth state and observability history;
+- a first-class versioned, read-only Observability API for scripts, monitors, agents, and the bundled UI; and
+- an optional Basic-authenticated Web Console that consumes that API.
 
 ## Non-goals
 

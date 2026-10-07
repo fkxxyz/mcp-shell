@@ -24,6 +24,7 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Persistent Shell execution contexts
 - Persistent token state
 - Tool-call logging
+- Versioned read-only Observability API for scripts, monitors, agents, and the bundled UI
 - Optional read-only Web Console with live Activity grouped by workspace
 - Guardrails for broad filesystem searches
 
@@ -39,7 +40,7 @@ The Shell root is the base for relative paths, not a filesystem sandbox; absolut
 
 An authorized client can read and modify files and execute commands with the permissions of the user running the server. In practice, access to this MCP endpoint should be treated similarly to remote shell access.
 
-In `local` mode, the server binds only to `127.0.0.1`; treat any tunnel forwarding that endpoint as part of the trusted boundary. In `remote` mode, use HTTPS ingress, protect the OAuth credentials, and expose it only to clients you trust.
+In `local` mode, the server binds only to `127.0.0.1`; treat any tunnel forwarding that endpoint as part of the trusted boundary. In `remote` mode, use HTTPS ingress, protect the OAuth credentials, and expose it only to clients you trust. Treat `WEB_PASSWORD` and `OBSERVABILITY_TOKEN` as sensitive read credentials: the Observability API can expose retained tool inputs, outputs, paths, and errors even though it cannot execute tools.
 
 ## Requirements
 
@@ -94,9 +95,10 @@ OAUTH_RESOURCE_ALIASES=
 TOOL_LOG_DIR=
 TOOL_LOG_MAX_CALLS=10000
 WEB_PASSWORD=
+OBSERVABILITY_TOKEN=
 ```
 
-`TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history. Each retained call keeps compact indexed metadata plus its compressed full payload; when the count is exceeded, the oldest complete calls retire by invocation start order.
+`TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history. Each retained call keeps compact indexed metadata plus its compressed full payload; when the count is exceeded, the oldest complete calls retire by invocation start order. Latest completed Shell activity is retained independently so activity status survives call-history eviction and restart.
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
 
@@ -142,17 +144,37 @@ npm run service:check
 
 For remote mode, place an HTTPS reverse proxy or equivalent trusted ingress in front of the service.
 
-### Web Console
+### Observability API and Web Console
 
-Set `WEB_PASSWORD` to enable the read-only Web Console and its browser API:
+The read-only Observability API is versioned under `/api/v1/*` and is usable independently of the Web Console. In local mode it is available on the loopback-only listener without an additional credential. In remote mode, set `OBSERVABILITY_TOKEN` for headless Bearer access:
+
+```bash
+curl -H "Authorization: Bearer $OBSERVABILITY_TOKEN" \
+  https://your-host.example.com/api/v1/shells/42/activity
+```
+
+The direct Shell activity response includes `active`, `running_call_count`, `last_event_at`, `active_until`, `server_time`, and `active_window_ms`. Activity is true while a call is running or until five minutes after the latest lifecycle event; that policy is owned by the server. Use `active` and `active_until` as authoritative results; `active_window_ms` is informational and must not be used to reimplement the policy in clients.
+
+Useful endpoints include:
+
+```text
+GET /api/v1/activity
+GET /api/v1/activity/stream
+GET /api/v1/shells?cwd=...
+GET /api/v1/shells/:shell_id/activity
+GET /api/v1/shells/:shell_id/calls
+GET /api/v1/tool-calls/:call_id
+```
+
+Set `WEB_PASSWORD` to enable the read-only Web Console:
 
 ```text
 <base-url>/console/
 ```
 
-When enabled, opening `<base-url>/` redirects to `/console/`. When `WEB_PASSWORD` is unset, the root, Web Console, and browser API remain unavailable.
+When enabled, opening `<base-url>/` redirects to `/console/`. When `WEB_PASSWORD` is unset, the root and Web Console remain unavailable; the Observability API can still run headlessly.
 
-Use HTTP Basic Auth username `activity` and the configured password. The Web credential is separate from MCP OAuth and is never accepted by `/mcp`. Remote use requires HTTPS.
+Use HTTP Basic Auth username `activity` and the configured password. That Basic credential is also accepted by the remote read-only `/api/v1/*` surface so the same-origin Console can consume the public API. `OBSERVABILITY_TOKEN` enables API access without enabling the Console. Neither read credential is accepted by `/mcp`. Remote use requires HTTPS.
 
 The current Web Console is read-only. Activity groups tool calls by Shell root directory, streams live lifecycle events over SSE, and exposes addressable Workspace, Shell, and tool-call detail routes. Full tool input/output is fetched only when a retained call is opened.
 
@@ -211,7 +233,7 @@ Important files and directories include:
 ~/.mcp-shell/bin/
 ```
 
-Tool history metadata is indexed in `history.db`; complete inputs, outputs, and errors remain gzip-compressed under date-sharded `payloads/` directories. Existing legacy tool-log payloads are imported automatically on first startup after upgrading. Malformed legacy payloads are moved to `~/.mcp-shell/tool-logs/legacy-rejected/` and diagnosed instead of being retried on every restart.
+Tool history metadata is indexed in `history.db`; complete inputs, outputs, and errors remain gzip-compressed under date-sharded `payloads/` directories. **`history.db` also contains durable latest Shell activity:** deleting the database or the entire `tool-logs/` directory removes activity continuity across restarts, not just tool history. Normal `TOOL_LOG_MAX_CALLS` eviction preserves that activity state. Existing legacy tool-log payloads are imported automatically on first startup after upgrading. Malformed legacy payloads are moved to `~/.mcp-shell/tool-logs/legacy-rejected/` and diagnosed instead of being retried on every restart.
 
 `~/.mcp-shell/bin/` is the user command-override layer and is placed ahead of the repository's own `bin/` directory in `PATH`.
 
@@ -269,7 +291,8 @@ This runs server/Web type checks, server/Web tests, the Web dependency-boundary 
 
 ```text
 mcp-shell.ts       entry point
-src/contracts/     Web API transport types
+src/api/           versioned Observability API and read-only authentication
+src/contracts/     shared API transport types
 src/auth/          OAuth and token handling
 src/http/          HTTP application
 src/mcp/           MCP server and session handling

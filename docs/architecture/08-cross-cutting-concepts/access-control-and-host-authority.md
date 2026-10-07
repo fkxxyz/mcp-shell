@@ -29,15 +29,17 @@ The meaningful protected asset is the process user's host authority, not merely 
 
 A network-reachable mcp-shell endpoint requires authentication before MCP requests reach session handling. The current implementation uses bearer tokens issued by its built-in OAuth flow.
 
-The Web Console is a separate authority surface on the same listener. `/console/*` and `/api/*` use HTTP Basic authentication with `WEB_PASSWORD` and grant read-only access to browser-visible observability data. Web credentials are not accepted by `/mcp`, and the browser does not receive an MCP bearer token.
+The Web Console and versioned Observability API are read-only authority surfaces on the same listener. `/console/*` uses HTTP Basic authentication with `WEB_PASSWORD`. In remote mode `/api/v1/*` accepts the dedicated `OBSERVABILITY_TOKEN` Bearer credential and, when configured, the same Web Basic credential; the API is absent when neither read credential exists. Neither read credential is accepted by `/mcp`, and the browser does not receive an MCP bearer token.
 
-The read-only property is part of the current authority contract, not an assumption that automatically extends to future UI features. The first browser mutation requires an explicit security reassessment covering same-origin/CSRF enforcement, destructive-action confirmation where appropriate, audit semantics, idempotency requirements, and whether one Web credential still represents acceptable authority.
+The read-only property is part of the current API/Web authority contract, not an assumption that automatically extends to future features. The first mutation requires an explicit security reassessment covering same-origin/CSRF enforcement where applicable, destructive-action confirmation, audit semantics, idempotency requirements, and whether the current read credentials remain acceptable.
 
 Application-local brute-force tracking is not part of this boundary. Public-edge rate limiting or abuse controls belong to the upstream ingress. HTTPS remains mandatory for public activity access because HTTP Basic credentials otherwise cross the network in replayable form.
 
 ## Local Rule
 
 The local no-OAuth profile is safe only under a stronger placement invariant: the server binds exclusively to `127.0.0.1`. Connection mode encodes this pair atomically rather than exposing independent “bind anywhere” and “disable auth” switches that can form an unsafe combination.
+
+The local `/api/v1/*` surface follows that same placement invariant and does not add another credential. This does not weaken the local boundary because the same loopback listener already exposes the more-powerful unauthenticated `/mcp` authority.
 
 ## Tunnel Rule
 
@@ -69,6 +71,6 @@ Pinned wrappers are resource/ergonomic guardrails. Because user overrides intent
 
 ## Secrets and Logs
 
-OAuth client secret, administrator password, access tokens, refresh tokens, activity password, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.
+OAuth client secret, administrator password, access tokens, refresh tokens, Web password, Observability token, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.
 
-The Web password is independent from the MCP OAuth client secret and owner authorization password. Browser API responses and the SPA HTML shell are not cacheable; content-hashed static assets may be cached immutably. Cross-origin API access is not enabled, and untrusted tool content is rendered as text rather than executable markup.
+The Web password and Observability token are independent from the MCP OAuth client secret and owner authorization password. API responses and the SPA HTML shell are not cacheable; content-hashed static assets may be cached immutably. Cross-origin API access is not enabled, and untrusted tool content is rendered as text rather than executable markup.

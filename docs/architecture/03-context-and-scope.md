@@ -90,17 +90,17 @@ When the same mcp-shell must retain application-layer OAuth for other network cl
 
 An MCP session is not a sandbox. Once a trusted caller can invoke `bash`, `write`, `edit`, `apply_patch`, or rename operations, the effective authority is the process user's authority on the host.
 
-### Web Console
+### Read-Only Observability
 
 ```text
-operator browser
+operator browser / script / monitor
    |
-   | HTTPS / HTTP Basic
+   | local loopback or remote read credential
    v
-/console/* + /api/*
+/console/* and/or /api/v1/*
    |
    v
 read-only observability authority
 ```
 
-The Web Console is a separate authority from MCP. Its credential permits only the mounted browser/API read surface; it is never accepted by `/mcp`. The current Web API exposes observation only. Introducing browser-originated mutation requires a separate security reassessment rather than inheriting the read-only Basic-auth boundary by default.
+The Observability API is a first-class authority surface separate from MCP, and the Web Console is one client of it. Remote read credentials permit only `/api/v1/*` (plus `/console/*` for the Web Basic credential) and are never accepted by `/mcp`. Introducing API or browser mutation requires a separate security reassessment rather than inheriting the read-only boundary.

@@ -16,6 +16,7 @@ type BaseAppConfig = {
   port: number;
   commandPath: CommandPathPolicy;
   webPassword?: string;
+  observabilityToken?: string;
   toolLogs: {
     dir: string;
     maxCalls: number;
@@ -85,10 +86,12 @@ export async function loadConfig(): Promise<AppConfig> {
     : join(configDir, "tool-logs");
   const toolLogMaxCalls = parsePositiveInteger(process.env.TOOL_LOG_MAX_CALLS, 10_000);
   const webPassword = process.env.WEB_PASSWORD || undefined;
+  const observabilityToken = process.env.OBSERVABILITY_TOKEN || undefined;
   const common = {
     port: Number(process.env.PORT ?? 3000),
     commandPath,
     webPassword,
+    observabilityToken,
     toolLogs: { dir: toolLogDir, maxCalls: toolLogMaxCalls },
     paths: { configDir, envFile, shellEnvFile, stateFile, shellsDbFile, userBinDir, repoBinDir },
   };
@@ -144,8 +147,10 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "# Tool call history. Complete calls are retained by count; full payloads remain gzip-compressed.",
       "TOOL_LOG_DIR=",
       "TOOL_LOG_MAX_CALLS=10000",
-      "# Optional read-only Web Console. When blank, /console and /api are not mounted.",
+      "# Optional read-only Web Console. Its Basic credential also authorizes /api/v1.",
       "WEB_PASSWORD=",
+      "# Optional bearer token for the read-only /api/v1 observability API.",
+      "OBSERVABILITY_TOKEN=",
       "# Optional shell file to source at startup for PATH and other user environment variables:",
       "SHELL_ENV_FILE=~/.shellenv",
       "",

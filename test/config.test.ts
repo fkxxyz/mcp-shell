@@ -106,6 +106,7 @@ test("loadConfig accepts local mode without remote OAuth configuration", async (
       "MODE=local",
       "PORT=4312",
       "WEB_PASSWORD=dashboard-secret",
+      "OBSERVABILITY_TOKEN=monitor-secret",
       "TOOL_LOG_DIR=logs",
       "TOOL_LOG_MAX_CALLS=123",
       "",
@@ -116,6 +117,7 @@ test("loadConfig accepts local mode without remote OAuth configuration", async (
     assert.equal(config.port, 4312);
     assert.equal(config.paths.shellsDbFile, join(configDir, "shells.db"));
     assert.equal(config.webPassword, "dashboard-secret");
+    assert.equal(config.observabilityToken, "monitor-secret");
     assert.equal(config.toolLogs.dir, join(configDir, "logs"));
     assert.equal(config.toolLogs.maxCalls, 123);
     assert.equal("publicBaseUrl" in config, false);

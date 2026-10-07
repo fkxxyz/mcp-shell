@@ -75,7 +75,7 @@ The skill tree is global and mutable. Therefore a skill advertised during Shell 
 4. A Shell-aware tool enters the shared invocation helper, which resolves its `shell_id` through `ShellStore`; unknown IDs fail without falling back to a process working directory.
 5. `ToolCallRecorder` publishes the running call to the bounded activity projection before executing the tool.
 6. Relative operations use the resolved Shell `cwd`.
-7. After execution, `ToolHistoryStore` attempts to persist the completed success/error record plus bounded preview and enforce complete-call retention.
+7. After execution, `ObservabilityStore` attempts to persist the completed success/error record plus bounded preview and enforce complete-call retention.
 8. `ToolCallRecorder` publishes the completed activity state, including whether full payload detail was retained.
 9. The original tool result or original tool error is returned through the MCP transport.
 

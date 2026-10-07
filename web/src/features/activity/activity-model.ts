@@ -1,10 +1,12 @@
 import type {
+  ActivityCallEventDto,
+  ActivityShellDto,
   ActivitySnapshotDto,
   ActivityWorkspaceDto,
+  ActivityWorkspacePresenceDto,
   ToolCallSummaryDto,
-} from "../../../../src/contracts/activity";
+} from "../../../../src/contracts/observability";
 
-const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_CALLS = 10;
 export const ACTIVITY_CARD_ROWS = 5;
 const EMPTY_SHELL_CALLS: ActivityCallView[] = [];
@@ -13,12 +15,14 @@ type ActivityShellState = {
   shellId: number;
   lastEventAt: number;
   runningCount: number;
+  activeUntil: number | null;
 };
 
 type ActivityWorkspaceState = {
   cwd: string;
   lastEventAt: number;
   runningCount: number;
+  activeUntil: number | null;
   recentCalls: ActivityCallView[];
   recentShells: ActivityShellState[];
 };
@@ -79,8 +83,7 @@ export class ActivityStore {
   }
 
   replaceSnapshot(snapshot: ActivitySnapshotDto): void {
-    const serverTime = Date.parse(snapshot.server_time);
-    this.clockOffset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
+    this.updateClock(snapshot.server_time);
     const now = this.now();
 
     this.workspaces.clear();
@@ -98,7 +101,8 @@ export class ActivityStore {
     this.emit();
   }
 
-  applyCall(call: ToolCallSummaryDto): void {
+  applyCall(event: ActivityCallEventDto): void {
+    const call = event.call;
     if (!call.cwd) return;
 
     let workspace = this.workspaces.get(call.cwd);
@@ -108,6 +112,7 @@ export class ActivityStore {
         cwd: call.cwd,
         lastEventAt: 0,
         runningCount: 0,
+        activeUntil: null,
         recentCalls: [],
         recentShells: [],
       };
@@ -118,17 +123,6 @@ export class ActivityStore {
     const wasActive = existed && this.isActive(workspace, now);
     const existingIndex = workspace.recentCalls.findIndex((item) => item.call.id === call.id);
     const previousState = existingIndex >= 0 ? workspace.recentCalls[existingIndex] : undefined;
-    const previous = previousState?.call;
-
-    if (call.status === "running") {
-      if (!previous || previous.status !== "running") workspace.runningCount += 1;
-    } else if (previous?.status === "running") {
-      workspace.runningCount = Math.max(0, workspace.runningCount - 1);
-    } else if (!previous && workspace.runningCount > 0) {
-      workspace.runningCount -= 1;
-    }
-
-    updateShellActivity(workspace, call, previous);
 
     const nextCall: ActivityCallView = {
       call,
@@ -139,8 +133,8 @@ export class ActivityStore {
       : [nextCall, ...workspace.recentCalls];
     workspace.recentCalls = retainRecentCalls(merged, MAX_RECENT_CALLS);
 
-    const eventAt = callEventAt(call);
-    if (Number.isFinite(eventAt)) workspace.lastEventAt = Math.max(workspace.lastEventAt, eventAt);
+    if (event.workspace_activity) applyWorkspacePresence(workspace, event.workspace_activity);
+    if (event.shell_activity) upsertShellPresence(workspace, event.shell_activity);
 
     const nowActive = this.isActive(workspace, now);
     if (!wasActive && nowActive) {
@@ -177,12 +171,18 @@ export class ActivityStore {
     return expired.length > 0;
   }
 
+  private updateClock(serverTimeValue: string): void {
+    const serverTime = Date.parse(serverTimeValue);
+    this.clockOffset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
+  }
+
   private now(): number {
     return Date.now() + this.clockOffset;
   }
 
   private isActive(workspace: ActivityWorkspaceState, now: number): boolean {
-    return workspace.runningCount > 0 || now - workspace.lastEventAt < ACTIVE_WINDOW_MS;
+    return workspace.runningCount > 0 ||
+      (workspace.activeUntil != null && now < workspace.activeUntil);
   }
 
   private pruneInactiveShells(now: number): void {
@@ -229,51 +229,48 @@ export class ActivityStore {
 }
 
 function fromDto(item: ActivityWorkspaceDto, now: number): ActivityWorkspaceState {
-  return {
+  const workspace: ActivityWorkspaceState = {
     cwd: item.cwd,
-    lastEventAt: Date.parse(item.last_event_at),
+    lastEventAt: parseTime(item.last_event_at) ?? 0,
     runningCount: Number(item.running_call_count) || 0,
+    activeUntil: item.active ? parseTime(item.active_until) : null,
     recentCalls: retainRecentCalls(
       (item.recent_calls ?? []).map((call) => ({ call, updateRevision: 0 })),
       MAX_RECENT_CALLS,
     ),
-    recentShells: (item.recent_shells ?? [])
-      .map((shell) => ({
-        shellId: shell.shell_id,
-        lastEventAt: Date.parse(shell.last_event_at),
-        runningCount: Number(shell.running_call_count) || 0,
-      }))
-      .filter((shell) => Number.isFinite(shell.lastEventAt) && isShellActive(shell, now)),
+    recentShells: (item.recent_shells ?? []).map(fromShellDto),
   };
+  workspace.recentShells = workspace.recentShells.filter((shell) => isShellActive(shell, now));
+  return workspace;
 }
 
-function updateShellActivity(
+function applyWorkspacePresence(
   workspace: ActivityWorkspaceState,
-  call: ToolCallSummaryDto,
-  previous: ToolCallSummaryDto | undefined,
+  presence: ActivityWorkspacePresenceDto,
 ): void {
-  if (call.shell_id == null) return;
+  workspace.lastEventAt = parseTime(presence.last_event_at) ?? workspace.lastEventAt;
+  workspace.runningCount = Number(presence.running_call_count) || 0;
+  workspace.activeUntil = presence.active ? parseTime(presence.active_until) : null;
+}
 
-  let shell = workspace.recentShells.find((item) => item.shellId === call.shell_id);
-  if (!shell) {
-    shell = {
-      shellId: call.shell_id,
-      lastEventAt: 0,
-      runningCount: 0,
-    };
-    workspace.recentShells.push(shell);
+function upsertShellPresence(workspace: ActivityWorkspaceState, presence: ActivityShellDto): void {
+  const next = fromShellDto(presence);
+  const index = workspace.recentShells.findIndex((shell) => shell.shellId === next.shellId);
+  if (!presence.active) {
+    if (index >= 0) workspace.recentShells.splice(index, 1);
+    return;
   }
+  if (index >= 0) workspace.recentShells[index] = next;
+  else workspace.recentShells.push(next);
+}
 
-  if (call.status === "running") {
-    if (!previous || previous.status !== "running") shell.runningCount += 1;
-  } else if (previous?.status === "running" && previous.shell_id === call.shell_id) {
-    shell.runningCount = Math.max(0, shell.runningCount - 1);
-  } else if (!previous && shell.runningCount > 0) {
-    shell.runningCount -= 1;
-  }
-
-  const eventAt = callEventAt(call);
-  if (Number.isFinite(eventAt)) shell.lastEventAt = Math.max(shell.lastEventAt, eventAt);
+function fromShellDto(shell: ActivityShellDto): ActivityShellState {
+  return {
+    shellId: shell.shell_id,
+    lastEventAt: parseTime(shell.last_event_at) ?? 0,
+    runningCount: Number(shell.running_call_count) || 0,
+    activeUntil: shell.active ? parseTime(shell.active_until) : null,
+  };
 }
 
 function toView(workspace: ActivityWorkspaceState, now: number): ActivityWorkspaceView {
@@ -287,7 +284,7 @@ function toView(workspace: ActivityWorkspaceState, now: number): ActivityWorkspa
 }
 
 function isShellActive(shell: ActivityShellState, now: number): boolean {
-  return shell.runningCount > 0 || now - shell.lastEventAt < ACTIVE_WINDOW_MS;
+  return shell.runningCount > 0 || (shell.activeUntil != null && now < shell.activeUntil);
 }
 
 function retainRecentCalls(calls: ActivityCallView[], limit: number): ActivityCallView[] {
@@ -359,8 +356,10 @@ function sortCallViews(calls: ActivityCallView[]): ActivityCallView[] {
   });
 }
 
-function callEventAt(call: ToolCallSummaryDto): number {
-  return Date.parse(call.finished_at ?? call.started_at);
+function parseTime(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function compareTime(a: string, b: string): number {

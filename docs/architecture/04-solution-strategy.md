@@ -72,13 +72,13 @@ Tool execution, durable evidence, and live browser activity share one tool-call 
 
 The Activity feature groups Shells by persisted root `cwd`, because the working directory is the useful project-level identity for an operator. This grouping remains a read model rather than a durable Workspace entity.
 
-## First-Class Web Console, Same Process
+## First-Class Observability API and Web Console, Same Process
 
-The browser surface is a first-class Web Console rather than an Activity-owned static subtree. React + TypeScript + Vite provide the application shell; TanStack Router owns addressable navigation; TanStack Query owns request-derived server state; native SSE continues to deliver Activity lifecycle facts. The framework-independent Activity model retains the two-tier stable-ordering policy.
+The read-only `/api/v1/*` Observability API is a first-class product interface for scripts, monitors, agents, and the bundled Web Console. It owns stable transport contracts while backend observability policy owns current activity semantics. Native SSE delivers lifecycle updates and a normal JSON endpoint supports polling.
 
-The Web Console remains a client of explicit `/api/*` HTTP/SSE contracts. It does not import observability stores, Shell persistence, or MCP runtime objects. Browser and backend are one repository, one release, one origin, and one production process; Vite is development/build tooling rather than another deployed server.
+The browser remains a first-class Web Console rather than an Activity-owned static subtree. React + TypeScript + Vite provide the application shell; TanStack Router owns addressable navigation; TanStack Query owns request-derived server state; the framework-independent Activity model owns stable two-tier presentation ordering. The Web Console consumes `/api/v1/*` and does not import observability stores, Shell persistence, or MCP runtime objects.
 
-The current Web authority remains read-only. WebSocket transport, durable event replay, independent frontend deployment, SSR/full-stack React frameworks, global client-state libraries, API versioning, analytics, and a tool-log database migration require demonstrated need before adoption.
+API and Web remain in one repository, one production process, and one listener; the API server artifact can run headlessly without the Web build. WebSocket transport, durable event replay, independent frontend deployment, SSR/full-stack React frameworks, global client-state libraries, mutation/RBAC, analytics, and a separate API platform require demonstrated need before adoption.
 
 ## Build Once, Run Compiled Output
 

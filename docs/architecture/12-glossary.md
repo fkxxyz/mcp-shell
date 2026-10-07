@@ -30,8 +30,10 @@ facets:
 | Shell | A durable execution-state handle identified by integer `shell_id`. Its current state includes `cwd`; it survives MCP session and process lifetime and is not project identity. |
 | OAuth state | Authorization codes, access tokens, and refresh tokens managed by the built-in remote-mode authorization service. |
 | Tool log | Best-effort persisted record of a registered tool invocation, its input, output/error, timing, and available session/actor context. |
-| Web Console | Optional same-origin React application under `/console/*`, enabled together with the read-only `/api/*` browser surface by `WEB_PASSWORD`. |
-| Web authority | Current HTTP Basic-authenticated browser authority. It is read-only and distinct from MCP host-tool authority. |
+| Observability API | Versioned read-only JSON/SSE interface under `/api/v1/*`, intended for scripts, monitors, agents, and the bundled Web Console. |
+| Observability authority | Read-only API authority. Remote access uses `OBSERVABILITY_TOKEN` Bearer and/or configured Web Basic credentials; it is distinct from MCP host-tool authority. |
+| Web Console | Optional same-origin React application under `/console/*`, enabled by `WEB_PASSWORD` and consuming the Observability API. |
+| Web authority | HTTP Basic-authenticated browser authority. It is read-only, is accepted by the Observability API, and never grants MCP host-tool authority. |
 | Command wrapper | Repository executable placed early in PATH to alter default command behavior, such as bounding broad searches. |
 | Guardrail | A mechanism intended to reduce accidental misuse or cost without being relied on as a hostile-caller security boundary. |
 | Implementation convergence | The work of changing code and tests so they match an already accepted architecture decision. |

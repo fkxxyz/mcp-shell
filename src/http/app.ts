@@ -1,4 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import { createRequireObservabilityAuth } from "../api/observability-auth.js";
+import { createObservabilityApiRouter } from "../api/v1/router.js";
 import type { AppConfig } from "../config.js";
 import { createOAuthRouter } from "../auth/routes.js";
 import { OAuthService } from "../auth/oauth-service.js";
@@ -8,18 +10,16 @@ import { FileMutationCoordinator } from "../host/file-mutation-coordinator.js";
 import { ProcessSupervisor } from "../host/process-supervisor.js";
 import { McpSessionManager } from "../mcp/session-manager.js";
 import { createMcpRouter } from "../mcp/routes.js";
-import { ActivityQuery } from "../observability/activity-query.js";
+import { ACTIVITY_ACTIVE_WINDOW_MS } from "../observability/activity-policy.js";
+import { ObservabilityQuery } from "../observability/observability-query.js";
 import { ActivityTracker } from "../observability/activity-tracker.js";
 import { ToolCallRecorder } from "../observability/tool-call-recorder.js";
-import { ToolHistoryStore } from "../observability/tool-history-store.js";
+import { ObservabilityStore } from "../observability/observability-store.js";
 import { ShellStore } from "../shell-store.js";
 import { SkillCatalog } from "../skills.js";
 import { DrainGate } from "../runtime/drain-gate.js";
 import { InvocationGate } from "../tools/invocation-gate.js";
 import { LSPServerManager } from "../tools/lsp.js";
-import {
-  createActivityApiRouter,
-} from "./activity-routes.js";
 import { createRequireWebBasicAuth } from "./web-auth.js";
 import {
   assertWebUiBuild,
@@ -54,18 +54,24 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
 
   const shells = await ShellStore.open(config.paths.configDir, config.paths.shellsDbFile);
   const skills = dependencies.skills ?? new SkillCatalog();
-  const logs = new ToolHistoryStore(config.toolLogs.dir, config.toolLogs.maxCalls);
+  const logs = new ObservabilityStore(config.toolLogs.dir, config.toolLogs.maxCalls);
   const activityHistoryCalls = Math.min(config.toolLogs.maxCalls, MAX_ACTIVITY_HISTORY_CALLS);
   const activity = new ActivityTracker(activityHistoryCalls);
   try {
     await logs.initialize();
     activity.bootstrap(logs.readRecent(activityHistoryCalls));
+    activity.bootstrapShellActivity(
+      logs.listShellActivitySince(Date.now() - ACTIVITY_ACTIVE_WINDOW_MS).map((shell) => ({
+        ...shell,
+        runningCallCount: 0,
+      })),
+    );
   } catch (error) {
     console.error("Failed to initialize tool activity history:", error);
   }
 
   const recorder = new ToolCallRecorder(logs, activity);
-  const query = new ActivityQuery(shells, logs, activity);
+  const query = new ObservabilityQuery(shells, logs, activity);
   const mutations = new FileMutationCoordinator();
   const processes = new ProcessSupervisor();
   const lspManager = dependencies.lspManager ?? new LSPServerManager();
@@ -80,6 +86,17 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
     lspManager,
   );
 
+  if (config.mode === "local") {
+    app.use("/api/v1", observabilityApiSecurityHeaders, createObservabilityApiRouter(query, activity));
+  } else if (config.webPassword || config.observabilityToken) {
+    app.use(
+      "/api/v1",
+      observabilityApiSecurityHeaders,
+      createRequireObservabilityAuth(config),
+      createObservabilityApiRouter(query, activity),
+    );
+  }
+
   if (config.webPassword) {
     const webRoot = dependencies.webRoot ?? defaultWebRoot();
     if (process.env.NODE_ENV === "production" || isCompiledServerRuntime()) {
@@ -91,7 +108,6 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
       res.setHeader("Cache-Control", "no-store");
       res.redirect(302, "/console/");
     });
-    app.use("/api", webApiSecurityHeaders, requireWebAuth, createActivityApiRouter(query, activity));
     app.use("/console", webConsoleSecurityHeaders, requireWebAuth, createWebUiRouter(webRoot));
   }
 
@@ -196,7 +212,7 @@ async function settlesWithin(promise: Promise<void>, timeoutMs: number): Promise
   });
 }
 
-function webApiSecurityHeaders(_req: Request, res: Response, next: NextFunction): void {
+function observabilityApiSecurityHeaders(_req: Request, res: Response, next: NextFunction): void {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");

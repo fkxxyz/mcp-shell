@@ -30,7 +30,7 @@ export function ActivityPage() {
                 ))}
               </div>
             )
-          : <p className={styles.empty}>No activity in the last 10 minutes.</p>}
+          : <p className={styles.empty}>No active workspaces.</p>}
       </section>
 
       {view.earlier.length > 0 && (

@@ -1,5 +1,5 @@
 ---
-summary: "Defines workspace-oriented tool activity, observability ownership, read models, live delivery, and browser UI boundaries."
+summary: "Defines workspace-oriented tool activity, authoritative activity presence, durable observability state, read models, live delivery, and client boundaries."
 viewpoint: static
 stakeholders:
   - architect
@@ -29,124 +29,153 @@ facets:
 
 ## User Model
 
-The activity surface answers one primary question:
+Activity answers:
 
-> Which working directories are agents operating in, and what are they doing there now?
+> Which working directories are agents operating in, what are they doing there now, and is a particular Shell still active?
 
-The user-facing grouping key is a Shell root cwd, not shell_id. A Shell remains a distinct durable execution context; multiple Shells rooted at the same cwd are grouped as one workspace in the activity read model.
+The overview groups calls by Shell root `cwd`, because that is the useful project-level identity for an operator. A Shell remains a distinct durable execution context identified by `shell_id`; multiple Shells with one `cwd` are grouped only in the read model.
 
-This grouping is a projection only. It does not introduce a durable Workspace entity.
+No durable Workspace entity is introduced.
 
 ## Identity Rules
 
-- ShellStore is authoritative for shell_id -> cwd.
-- Workspace identity is the normalized absolute cwd already stored by ShellStore.
-- Activity code does not add realpath() canonicalization or otherwise change Shell identity semantics.
-- Multiple Shells may share one cwd and remain distinct.
-- A Shell root is stable even if one command changes its own process working directory.
-- create_shell knows its requested cwd before a resulting shell_id exists, so activity metadata permits shell_id to be absent while cwd is known.
+- `ShellStore` is authoritative for Shell existence, `shell_id -> cwd`, and creation time.
+- Workspace identity is the normalized absolute `cwd` already stored by `ShellStore`.
+- Activity code does not add `realpath()` canonicalization or otherwise redefine Shell identity.
+- Multiple Shells may share one `cwd` and remain distinct.
+- A Shell root remains stable even if one command changes its child-process working directory.
+- `create_shell` can publish its requested `cwd` before a resulting `shell_id` exists.
+
+## Activity Policy
+
+`src/observability/activity-policy.ts` is the single authority for active presence.
+
+A Shell or workspace is active when:
+
+- it owns at least one running call; or
+- with no running calls, the current server time is earlier than five minutes after its latest lifecycle event.
+
+The exact deadline is inactive. For a completed call the five-minute window begins at `finished_at`, not `started_at`. A long-running call therefore remains active for its entire run and receives a fresh five-minute window when it finishes.
+
+The API exposes `active`, `active_until`, `server_time`, and `active_window_ms`. Clients may use the returned deadline to refresh presentation locally, but they do not reproduce the five-minute rule.
 
 ## Tool-Call Lifecycle
 
-ToolCallRecorder is the single control point for recorded tool invocation lifecycle:
+`ToolCallRecorder` is the single control point for recorded invocation lifecycle:
 
 1. assign call ID and start time;
-2. derive a bounded, tool-agnostic input preview for live activity;
-3. publish the running call to ActivityTracker;
+2. derive a bounded, tool-agnostic input preview;
+3. publish the running call to `ActivityTracker`;
 4. execute the original tool operation;
-5. construct the final success or error record with the complete input;
-6. ask ToolHistoryStore to persist the completed record and bounded input preview;
-7. publish the completed state to ActivityTracker; and
+5. construct the final success/error record with complete input;
+6. ask `ObservabilityStore` to persist the completed record, preview, and latest Shell lifecycle event;
+7. publish the completed state to `ActivityTracker`; and
 8. preserve the original tool result or original tool error.
 
-Input-preview construction is mechanical rather than semantic: it bounds string length, collection width, and nesting depth without knowing tool names or argument names. Preview failure is observability failure and must not alter tool semantics.
+Input-preview construction is mechanical rather than semantic: it bounds string length, collection width, and nesting depth without knowing tool names or argument names.
 
-Observability is best-effort with respect to host-tool semantics. Logging or activity publication failure must not convert a successful host operation into a failed tool call, and must not replace the original tool error.
+Observability is best-effort relative to host-tool semantics. Persistence or activity-publication failure must not convert a successful host operation into a failed tool call and must not replace the original tool error.
 
 ## Shell-Aware Invocation
 
-src/tools/invoke.ts is the shared invocation boundary for Shell-aware tools. It resolves the requested shell_id through ShellStore, obtains the Shell root, and supplies that identity to ToolCallRecorder before invoking tool-specific behavior.
+`src/tools/invoke.ts` is the shared invocation boundary for Shell-aware tools. It resolves `shell_id` through `ShellStore`, obtains the Shell root, and supplies that identity to `ToolCallRecorder` before invoking tool-specific behavior.
 
 Basic file/shell tools, patching, image inspection, and LSP tools do not independently reimplement Shell resolution plus activity recording.
 
-Unknown shell_id failures remain observable calls: the requested Shell ID is known while resolved cwd is absent.
+Unknown `shell_id` failures remain observable calls: the requested ID is known while resolved `cwd` is absent.
 
-create_shell uses the general recorder rather than Shell-aware invocation. Its requested cwd is available while running; after success the completed call may also include the created shell_id.
+`create_shell` uses the general recorder rather than Shell-aware invocation. Its requested `cwd` is available while running; after success the completed call carries the created `shell_id`.
 
-## ToolHistoryStore
+## ObservabilityStore
 
-ToolHistoryStore is the durable authority for completed tool-call history. It owns:
+`ObservabilityStore` owns one SQLite metadata database plus sharded payload files under `TOOL_LOG_DIR`.
+
+It has two persistence lifecycles.
+
+### Complete Call History
+
+Count-retained completed calls use:
 
 - compact SQLite metadata in `history.db`;
-- date-sharded gzip payload files under `payloads/YYYY/MM/DD/`;
+- date-sharded gzip payloads under `payloads/YYYY/MM/DD/`;
 - atomic payload publication before metadata visibility;
-- count-bounded retention of complete call history;
 - indexed Shell-history pagination and recent-summary reads;
-- full payload retrieval by call ID; and
-- one-way import of the legacy `index.jsonl` plus `calls/*.json.gz` representation.
+- bounded input previews in metadata; and
+- full payload lookup by call ID.
 
-Completed records are durable evidence. Running calls are not persisted merely for the UI, avoiding recovery semantics for orphaned running records after process termination.
+Metadata and payload retire together under `TOOL_LOG_MAX_CALLS`.
 
-SQLite metadata stores identity, chronology, Shell/workspace identity, status, stored size, payload location, and the bounded input preview. Full input, output, and serialized errors remain in gzip payloads and are fetched only when a specific call is opened. Metadata and payload retire together under `TOOL_LOG_MAX_CALLS`, so preview lifetime cannot exceed the retained complete call.
+### Latest Shell Activity
 
-Payload bytes stay on asynchronous filesystem I/O rather than becoming synchronous `node:sqlite` BLOB writes. The SQLite index supplies durable ordering and lookup without loading retained filenames into memory or enumerating payload directories during normal startup. Metadata uses SQLite WAL mode with `synchronous=NORMAL`: tool history remains transactionally consistent, while the newest history may be lost on sudden host power loss because observability is explicitly best-effort relative to host actions.
+`history.db` also stores one compact `shell_activity` row per observed Shell:
 
-Legacy import preserves only retained payload-backed calls. Historical metadata whose payload was already removed by the old retention model is intentionally not promoted into the new durable authority. Malformed legacy payloads are moved to `legacy-rejected/` so a bad source record is diagnosed once and no longer prevents migration convergence on later restarts.
+- `shell_id`;
+- `cwd`; and
+- latest completed lifecycle-event time.
 
-## Bounded Startup and Runtime State
+This row is updated in the same SQLite metadata transaction as a completed call but is **not** retired with complete-call retention. Its purpose is semantic continuity of Shell activity across history eviction and process restart, not history caching. Clearing `history.db` or `TOOL_LOG_DIR` removes both historical calls and durable Shell activity; retention-based call eviction does not.
 
-Durable retention depth must not determine live-activity memory. ToolHistoryStore opens the indexed metadata store, converges retained count if configuration decreased, and reads only the bounded recent summaries needed for Activity bootstrap.
+Running-call counts are deliberately not persisted. A process restart terminates process-local running work, so restored running count is zero.
 
-The in-memory activity-history window is independently capped at 10,000 completed calls, even when `TOOL_LOG_MAX_CALLS` is configured much higher for payload retention. Raising durable payload retention therefore does not proportionally increase activity bootstrap time or steady-state activity memory.
+Schema v1 history upgrades to this projection by backfilling the latest retained completed event per Shell. Legacy gzip import also backfills imported Shell activity once. Normal startup does not rescan complete retained history for Shell activity.
 
-Legacy source corruption is quarantined and diagnosed without making valid retained history unreadable. Infrastructure/storage failures do not quarantine otherwise valid history; they fail initialization so the process enters a degraded history state. That same process does not repeatedly rerun initialization or migration on each tool completion, and continuous persistence failure is reported once until recovery. Observability remains subordinate to host-tool availability.
+## ActivityTracker
 
-ActivityTracker owns only bounded in-process state:
+`ActivityTracker` owns process-local live state:
 
 - currently running calls;
-- recent completed summaries;
-- per-workspace recent summaries;
-- per-workspace latest lifecycle-event time; and
-- connected live-feed subscribers.
+- bounded recent completed-call summaries;
+- bounded per-workspace recent-call summaries;
+- per-workspace latest lifecycle time;
+- per-Shell active-window presence and running-call count; and
+- connected SSE subscriber queues.
 
-Activity snapshots derive per-Shell recent activity facts from the same bounded completed-call history plus current running calls. This supporting projection carries `shell_id`, latest lifecycle time, and running-call count so the browser can calculate active-Shell counts without querying the durable Shell inventory or introducing a second mutable activity authority.
+Per-Shell presence is independent from recent-call retention. It is retained while the Shell has running work or remains inside the backend active window, then pruned. High call volume can therefore evict recent call cards without making an otherwise active Shell disappear.
 
-Completed-call retirement is one lifecycle inside the live projection: when a call leaves the bounded global recent window it also leaves any workspace recent-call projection, and a workspace with neither running nor retained recent calls is removed. Durable completed history may remain queryable long after that live/recent projection has forgotten the call.
+The complete-call live/recent window remains independently bounded at 10,000 completed calls even when durable payload retention is much larger.
 
-It does not read gzip payloads, enumerate Shells, persist workspace state, or decide visual ranking tiers.
+At startup, the tracker receives:
 
-## Query Composition
+1. the bounded recent-call summaries needed for live/recent presentation; and
+2. durable Shell activity rows still inside the active window.
 
-ActivityQuery composes read models from ActivityTracker, ShellStore, and ToolHistoryStore.
+Durable retention depth therefore does not determine active-presence correctness or startup memory.
 
-ShellStore remains authoritative for Shell existence and provides bounded cwd -> Shells queries needed by the UI. ToolHistoryStore is authoritative for retained completed-call history and latest retained Shell activity. ActivityTracker is authoritative only for running/recent in-process lifecycle state. Tool history is not used to infer the complete Shell inventory.
+## Authority Composition
 
-HTTP handlers delegate read-model assembly to ActivityQuery; they do not accumulate cross-store query logic.
+`ObservabilityQuery` is the single cross-authority read-model composer.
 
-## HTTP Surface
+Its inputs have distinct ownership:
 
-Activity is one feature inside the Web Console rather than the owner of the browser namespace. Its browser-facing endpoints are:
+- `ShellStore` -> Shell existence, `cwd`, creation time, workspace Shell enumeration;
+- `ActivityTracker` -> current running state, active-window in-process presence, bounded live/recent call state;
+- `ObservabilityStore` -> durable latest completed Shell event, retained completed history, full retained call payload;
+- `activity-policy.ts` -> active/deadline semantics.
 
-    /api/activity/stream
-    /api/shells?cwd=...
-    /api/shells/:shell_id/calls
-    /api/tool-calls/:call_id
+HTTP handlers do not recreate cross-store rules.
 
-The SPA itself lives under `/console/*`.
+For a direct Shell activity read, runtime tracker state wins while present because it includes current running counts. Once runtime presence expires or after restart, the query falls back to durable latest Shell activity and derives the current result from server time.
 
-The API is read-only. It does not expose tool execution, rerun, Shell close, log deletion, settings mutation, ranking, analytics, or workspace CRUD.
+## Versioned HTTP Surface
 
-Pagination cursors are opaque transport values. Browser code may persist and return a cursor but must not interpret it as a Shell ID, call ID, sequence, timestamp, or storage key.
+The first-class read-only API lives under `/api/v1/*`:
 
-The live endpoint uses Server-Sent Events because delivery is server-to-browser only. A connection receives:
+    GET /api/v1/activity
+    GET /api/v1/activity/stream
+    GET /api/v1/shells?cwd=...
+    GET /api/v1/shells/:shell_id/activity
+    GET /api/v1/shells/:shell_id/calls
+    GET /api/v1/tool-calls/:call_id
 
-1. a bounded current snapshot;
-2. tool_call.started events; and
-3. tool_call.finished events.
+`GET /api/v1/activity` supports polling. The SSE endpoint sends the same bounded current snapshot, then `tool_call.started` and `tool_call.finished` events.
 
-Summary events contain identity, lifecycle timestamps, status, payload availability, and an optional bounded input preview. They never contain complete tool inputs or outputs.
+Live events include the call plus server-derived workspace/Shell presence at publication time. Full tool input/output is never placed in the live feed by default.
 
-Snapshot workspace summaries also include `recent_shells`, a bounded supporting activity projection rather than complete Shell inventory. `/api/shells?cwd=...` remains authoritative for enumerating durable Shells belonging to a workspace.
+`GET /api/v1/shells/:shell_id/activity` is the authoritative point query for Shell presence. Unknown durable Shell IDs return `404 shell_not_found`.
+
+Pagination cursors are opaque transport values. Consumers may persist and return a cursor but must not decode it as a Shell ID, call ID, sequence, timestamp, or storage key.
+
+The API boundary and compatibility rules are governed by the Observability API Boundary ADR.
 
 ## Snapshot-to-Live Consistency
 
@@ -158,30 +187,30 @@ Opening a live feed is atomic with respect to the in-process projection:
 4. drain events queued after snapshot capture; and
 5. continue live delivery.
 
-This avoids the snapshot/live race without introducing durable event replay or Last-Event-ID.
+This avoids the snapshot/live race without durable event replay or `Last-Event-ID`.
 
-Each subscriber queue is bounded. If a client cannot consume events fast enough, the stream is closed rather than allowing unbounded server memory growth. Reconnection obtains a fresh snapshot.
+Each subscriber queue is bounded. A client that cannot drain its queue loses that stream instead of creating unbounded server memory. Reconnection obtains a fresh snapshot.
 
 ## Browser State and Ordering
 
-The framework-independent Activity model owns presentation policy. It maintains exactly two groups:
+The browser owns only presentation ordering.
 
-- ACTIVE: a workspace has a running call, or its latest lifecycle event is less than ten minutes old;
+It maintains two groups:
+
+- ACTIVE: server-derived presence is still active;
 - EARLIER: otherwise.
 
-Repeated calls within ACTIVE update content without reordering the workspace. A workspace promoted from EARLIER enters the front of ACTIVE. A local expiry timer demotes inactive workspaces even when no new server event arrives.
+Repeated calls inside ACTIVE update content without moving the workspace. Promotion from EARLIER moves a workspace to the front of ACTIVE. The connection/reconnection snapshot establishes the browser's server-clock offset; delayed live events do not recalibrate that clock. A local timer compares server-provided `active_until` with that server-adjusted time so idle SSE connections still visually expire on time.
 
-A Shell is active under the same ten-minute lifecycle rule, or while it owns a running call. The Activity model derives active-workspace, active-Shell, and running-call summary counts from these facts; the backend does not persist or rank those presentation states.
+The timer is a rendering mechanism, not an independent five-minute business rule.
 
-The Activity overview is a dense workspace wall rather than a Shell-grouped feed. Each workspace card shows at most five current-and-recent calls. Running calls are protected first, ordered by start time; the remaining slots use most recently completed calls. Shell identity is row metadata rather than a grouping level, preserving one readable activity trajectory per workspace. EARLIER workspaces use the same card representation behind a collapsed section by default.
+The Activity overview remains a dense workspace wall. Each workspace card shows at most five current-and-recent calls. Running calls are protected first; remaining slots use most recently completed calls. Shell identity stays row metadata rather than a grouping level.
 
-The browser also attaches an ephemeral update revision to each call in the live projection. Calls received in an SSE snapshot establish a quiet baseline at revision zero; each subsequent `tool_call.started` or `tool_call.finished` event increments the affected call revision. The revision exists only to identify a live lifecycle update for presentation and is neither persisted nor derived from wall-clock freshness.
-
-The ten-minute threshold, ACTIVE/EARLIER state, stable ordering, update revision, and visual rank are not persisted backend state.
+The browser attaches an ephemeral update revision to each live call. Snapshot calls begin at revision zero; subsequent lifecycle events increment the affected call revision. This signal is presentation-only and is neither persisted nor derived from wall-clock freshness.
 
 ## Browser Implementation Boundary
 
-The Web Console is a React + TypeScript SPA built by Vite. Activity remains feature-local:
+The Web Console is a React + TypeScript SPA built by Vite:
 
     web/
       index.html
@@ -197,89 +226,74 @@ The Web Console is a React + TypeScript SPA built by Vite. Activity remains feat
         lib/
         styles/
 
-`activity-model.ts` owns the two-tier ordering and event-merge rules without React dependencies. `ActivityProvider` owns the long-lived SSE connection and exposes model state to the application. The connection remains active while navigating to Shell or tool-call detail routes.
+`api.ts` consumes `/api/v1/*`. `activity-model.ts` owns stable two-tier ordering and event merge rules without React dependencies. `ActivityProvider` owns the long-lived SSE connection while navigation changes.
 
-TanStack Query owns bounded historical reads. A completed SSE event invalidates the affected Shell-history query and workspace-Shell query; the browser then rereads authoritative history instead of reproducing backend insertion/pagination rules inside the cache.
+TanStack Query owns historical reads. A completed SSE event invalidates affected Shell-history/workspace-Shell queries so the browser rereads authoritative history rather than reimplementing durable insertion or pagination.
 
-Shell detail composes two projections without changing either authority: paginated `/api/shells/:shell_id/calls` supplies completed history, while the bounded Activity model supplies current live calls for that Shell. The browser merges them by call ID: running/live-only calls come from the Activity projection; once completed history contains the same call, its data fields become authoritative while the live update revision may remain as a transient presentation signal. Running calls remain outside the paginated completed-history contract, so transient lifecycle state cannot change cursor semantics. History loading or failure does not hide already-known live calls. The live Shell overlay is intentionally bounded by the same recent-call Activity projection available in the SSE snapshot; it does not claim to enumerate every concurrently running call under arbitrarily high workspace fan-out.
+Shell detail composes paginated completed history with the bounded live-call overlay. It merges by call ID: running/live-only calls come from the Activity projection; once durable history contains the completed call, history fields become authoritative while the ephemeral live revision may remain.
 
-Shell and tool-call detail use addressable routes so refresh, browser back/forward, and copied links preserve user context. State with the same user expectation should prefer route/search state over hidden component state.
+The live call overlay is still bounded by the per-workspace recent-call projection. It does not claim to enumerate arbitrarily many simultaneous call rows after reconnect; this is distinct from Shell **active presence**, which is now lifecycle-complete inside its active window.
 
-The browser owns invocation presentation. A feature-local pure formatter orders preview arguments by a single global importance policy, keeps unknown arguments visible after known arguments, renders calls as `tool_name(arg=value, ...)`, and collapses structured values before CSS applies final single-line ellipsis. The backend does not know argument importance or construct presentation labels. Activity cards and Shell history share this formatter and one status indicator: running calls use motion/shape to distinguish in-progress work, successful calls use a success marker, and failed calls use a distinct error marker. Live update emphasis is driven by the ephemeral update revision rather than DOM mount timing or timestamp heuristics. Reduced-motion preferences suppress nonessential animation while preserving status shape and color.
+Tool inputs, outputs, errors, previews, and repository-controlled text are rendered as text rather than executable markup.
 
-Tool inputs, outputs, errors, previews, and repository-controlled text are rendered through React text nodes. Untrusted tool content must not be interpreted as executable markup.
+## Access Boundary
 
-## Access and Browser Security
+One listener carries three distinct authorities:
 
-The existing remote service continues to use one listener and one public origin. Authentication is separated by path and authority:
+    /mcp        -> remote OAuth or local profile       -> full MCP/host authority
+    /console/*  -> WEB_PASSWORD HTTP Basic            -> read-only Web Console
+    /api/v1/*   -> read-only observability authority  -> read-only API
 
-    /mcp        -> existing OAuth/local profile -> full MCP/host authority
-    /console/*  -> HTTP Basic Auth             -> read-only Web Console
-    /api/*      -> HTTP Basic Auth             -> read-only browser API
+In remote mode the API accepts `OBSERVABILITY_TOKEN` Bearer credentials and, when configured, the same `WEB_PASSWORD` Basic credential used by the Web Console. It is absent when neither read credential exists.
 
-The credential types are not interchangeable. Web Basic credentials are never accepted by `/mcp`; the browser does not need or receive an MCP bearer token.
+In local mode `/api/v1/*` is available on the loopback-only listener without another credential, matching the stronger local placement invariant already trusted for unauthenticated `/mcp`.
 
-The Web Basic password is configured independently through `WEB_PASSWORD`; the Basic username remains fixed as `activity` rather than adding another configuration surface. If `WEB_PASSWORD` is absent, both `/console/*` and `/api/*` are not mounted. This makes browser exposure opt-in and fail-closed.
+Neither read credential authorizes `/mcp`. MCP bearer tokens are not exposed to browser code.
 
-Brute-force protection and public-edge rate limiting are deployment concerns owned by the upstream ingress rather than application-local state.
+Remote Basic/Bearer read access requires HTTPS at the ingress. API responses and the SPA HTML shell use `Cache-Control: no-store`; content-hashed Web assets may be cached immutably. Cross-origin API access is not enabled.
 
-Because HTTP Basic credentials are replayable credentials, remote Web Console access requires HTTPS at the public ingress.
+Any future API or browser mutation requires explicit security reassessment rather than inheriting this read-only authority.
 
-All `/console/*` and `/api/*` resources sit behind the same Basic Auth middleware. API responses and the SPA HTML shell use `Cache-Control: no-store`; Vite content-hashed assets under `/console/assets/*` use immutable long-term caching. Cross-origin API access is not enabled.
-
-The UI uses a restrictive Content Security Policy appropriate for same-origin static assets and SSE, including no object embedding, no framing, and no interpretation of tool output as executable markup.
-
-The current Web authority is read-only. Adding any browser mutation is an explicit security reassessment point rather than an extension of this Activity design.
-
-## Target Source Organization
+## Source Organization
 
     src/
-      shell.ts
-      shell-store.ts
-      tools/
-        invoke.ts
-        ...
+      api/
+        observability-auth.ts
+        v1/
+          router.ts
+      contracts/
+        observability.ts
       observability/
+        activity-policy.ts
+        activity-tracker.ts
+        observability-query.ts
+        observability-store.ts
         tool-call.ts
         tool-call-recorder.ts
-        tool-history-store.ts
         legacy-tool-log-import.ts
-        activity-tracker.ts
-        activity-query.ts
       http/
         app.ts
-        activity-routes.ts
         web-auth.ts
         web-ui-routes.ts
-      contracts/
-        activity.ts
 
-    web/
-      index.html
-      vite.config.ts
-      src/
-        app/
-        routes/
-        features/activity/
-        lib/
-        styles/
-
-No generic repository/service/adapter hierarchy is introduced. Each module corresponds to a concrete ownership boundary.
+No generic repository/service/adapter hierarchy is introduced. Each module corresponds to an observed ownership boundary.
 
 ## Deliberate Non-Goals
 
-The current implementation does not introduce:
+The current design does not introduce:
 
 - WebSocket transport;
 - durable event replay;
-- a second workspace database;
+- a durable Workspace entity;
 - an external database service or independent history worker;
-- server-side activity scores or tiers;
+- server-side activity scores;
+- API mutation;
+- multi-user RBAC;
+- GraphQL or generated SDKs;
+- a separate API process or listener;
+- configurable per-client activity windows;
 - SSR or a full-stack React framework;
-- independently deployed frontend services;
-- global Redux/Zustand-style client state;
-- API versioning without an independently evolving consumer;
-- application-local brute-force state; or
+- independently deployed frontend services; or
 - analytics dashboards.
 
 These remain reassessment points rather than abstractions to build in advance.

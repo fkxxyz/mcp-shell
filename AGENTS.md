@@ -14,8 +14,9 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `src/http/app.ts` assembles the Express application and owns application-level cleanup.
 - `src/auth/` contains OAuth protocol logic, token state persistence, bearer middleware, and HTTP routes.
 - `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
-- `src/observability/` owns the unified tool-call lifecycle, durable completed-call history through SQLite metadata plus date-sharded gzip payloads, bounded live activity projection, and activity read models.
-- `src/contracts/` owns browser/server DTO shapes for the Web API without exposing backend implementation objects.
+- `src/api/` owns the versioned read-only Observability API and its remote read-credential boundary.
+- `src/observability/` owns the unified tool-call lifecycle, durable completed-call history plus independent latest Shell activity, backend active policy, bounded live activity projection, and observability read models.
+- `src/contracts/` owns shared JSON/SSE DTO shapes for the versioned Observability API without exposing backend implementation objects.
 - `src/tools/` contains modular MCP registrations and tool adapters. `basic.ts` registers application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`; `apply-patch.ts` owns structured patching, while `lsp.ts` owns LSP server/config selection, reusable-client management, workspace-edit application, formatting, and MCP presentation.
 - `src/lsp/` contains the reusable LSP runtime boundaries: `connection.ts` owns stdio/JSON-RPC lifecycle, while `client.ts` owns initialization, capabilities, document synchronization, feature requests, and diagnostics convergence.
 - `src/host/` contains narrow cross-tool host mechanisms for path resolution, structured file-mutation coordination, and supervised child-process lifecycle.
@@ -43,7 +44,7 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `POST /mcp`, `GET /mcp`, `DELETE /mcp`: authenticated MCP Streamable HTTP session operations.
 - `GET /`: redirects to `/console/` when `WEB_PASSWORD` enables the Web surface; otherwise unmounted.
 - `/console/*`: optional Basic-authenticated Web Console SPA when `WEB_PASSWORD` is configured.
-- `/api/*`: optional Basic-authenticated, read-only browser JSON/SSE API enabled by the same `WEB_PASSWORD`.
+- `/api/v1/*`: read-only Observability JSON/SSE API. Local mode mounts it on loopback without another credential; remote mode mounts it when `OBSERVABILITY_TOKEN` and/or `WEB_PASSWORD` provides read authority.
 
 ## Configuration
 
@@ -66,7 +67,7 @@ OAuth resource identity:
 - `PUBLIC_BASE_URL` is the primary protected-resource identifier.
 - `OAUTH_RESOURCE_ALIASES` is an optional comma-separated list of exact HTTPS identifiers that name the same protected MCP resource, for example when a trusted ingress or tunnel presents another canonical resource URL. Aliases are equivalent names, not independent authorization domains, and are enforced through authorization, token exchange/refresh, and bearer validation.
 
-Optional settings: `PORT` (defaults to `3000`), `OAUTH_RESOURCE_ALIASES`, `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), `TOOL_LOG_MAX_CALLS` (defaults to `10000`), and `WEB_PASSWORD`. `TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history: compact metadata in `history.db` and the corresponding date-sharded gzip payload retire together by invocation start order. `ActivityTracker` remains independently bounded for live/recent state, while retained Shell history is queried from `ToolHistoryStore`. `WEB_PASSWORD` enables both `/console/*` and `/api/*`; the fixed Basic Auth username is `activity`. The Web authority is currently read-only and is distinct from MCP authority. The server listens on `0.0.0.0` in remote mode and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
+Optional settings: `PORT` (defaults to `3000`), `OAUTH_RESOURCE_ALIASES`, `TOOL_LOG_DIR` (defaults to `~/.mcp-shell/tool-logs`), `TOOL_LOG_MAX_CALLS` (defaults to `10000`), `WEB_PASSWORD`, and `OBSERVABILITY_TOKEN`. `TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history: compact metadata in `history.db` and the corresponding date-sharded gzip payload retire together by invocation start order. Latest completed Shell activity is persisted separately from that retention so API activity semantics survive history eviction and restart. `ActivityTracker` remains independently bounded for live/recent state, while retained history and latest durable Shell activity are queried from `ObservabilityStore`. `WEB_PASSWORD` enables `/console/*` and its fixed Basic Auth username is `activity`; the same credential is accepted by the read-only API. `OBSERVABILITY_TOKEN` enables remote Bearer API access without enabling the Console. Neither read credential authorizes `/mcp`. The server listens on `0.0.0.0` in remote mode and reports `${PUBLIC_BASE_URL}/mcp` as its MCP URL. A reverse proxy or equivalent public HTTPS ingress is expected when deployed remotely.
 
 Command lookup uses a pinned PATH prefix. `~/.mcp-shell/bin` is always the first entry and is the user override layer; this repository's `bin/` directory is always second and is the repository default/guardrail layer. The remaining PATH follows afterward. The prefix is normalized again at child-process spawn boundaries so host-tool, LSP, or other environment rewriting cannot move those two entries behind another directory. User overrides intentionally take precedence over repository wrappers, so this mechanism is a customization and guardrail layer, not a security boundary against an authorized caller.
 
@@ -90,5 +91,5 @@ npm run dev
 - LSP tools require compatible language servers and project LSP configuration. Rename applies returned workspace edits directly.
 - Token state is shared through a local JSON file, not a database or distributed store. Multiple server instances are not coordinated.
 - The Web Console and backend are one repository, one release, one origin, and one production deployment unit; there is no independent frontend service or SSR layer.
-- The browser API is read-only. The first Web mutation requires an explicit security reassessment rather than inheriting the current Basic-auth boundary automatically.
+- The versioned Observability API is read-only and is a first-class interface for scripts, monitors, agents, and the Web Console. The first API or Web mutation requires an explicit security reassessment rather than inheriting the current read authority automatically.
 - User-level systemd lifecycle policy has a repository-owned install/check path, but production build artifacts are still updated in place rather than switched atomically as a release unit.

@@ -1,4 +1,4 @@
-import type { ToolCallStatusDto } from "../../../../../src/contracts/activity";
+import type { ToolCallStatusDto } from "../../../../../src/contracts/observability";
 import styles from "./tool-call-status.module.css";
 
 export function ToolCallStatus({ status }: { status: ToolCallStatusDto }) {

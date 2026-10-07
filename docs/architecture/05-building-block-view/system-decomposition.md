@@ -39,8 +39,9 @@ Owns:
 - optional shell-environment sourcing;
 - command-path construction;
 - validation of required server configuration;
-- parsing exact HTTPS OAuth resource aliases for remote mode; and
-- optional `WEB_PASSWORD`, which enables the Basic-authenticated `/console/*` and `/api/*` Web surface together when configured.
+- parsing exact HTTPS OAuth resource aliases for remote mode;
+- optional `WEB_PASSWORD`, which enables the Basic-authenticated `/console/*` Web Console and is also accepted as a read-only API credential; and
+- optional `OBSERVABILITY_TOKEN`, which enables Bearer access to the remote `/api/v1/*` read-only Observability API without requiring the Web Console.
 
 `AppConfig` is mode-dependent: local mode carries the shared runtime configuration only, while remote mode additionally requires OAuth/public-base-url settings. Shell roots are runtime data created through `create_shell`, not server configuration.
 
@@ -107,23 +108,25 @@ Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root 
 
 ## Observability (`src/observability/`)
 
-`ToolCallRecorder` owns the recorded invocation lifecycle. `ToolHistoryStore` owns durable completed-call history: SQLite metadata, sharded gzip payloads, retention, migration, and history queries. `ActivityTracker` owns bounded live/recent state and subscribers. `ActivityQuery` composes UI read models from durable Shell/history authorities plus live Activity state.
+`ToolCallRecorder` owns the recorded invocation lifecycle. `ObservabilityStore` owns durable completed-call history plus latest completed per-Shell activity: SQLite metadata, sharded gzip payloads, retention, migration, and history queries. `ActivityTracker` owns process-local running state, active-window Shell presence, bounded live/recent calls, and subscribers. `activity-policy.ts` owns the five-minute active rule. `ObservabilityQuery` composes API read models from durable Shell/observability authorities plus live Activity state.
 
 Complete call payloads remain gzip-compressed in date-sharded files while `history.db` stores compact indexed metadata and bounded previews. Startup reads only the bounded recent summary window needed for Activity bootstrap; retained Shell history remains queryable independently of that live/recent window.
 
-The activity projection groups calls by Shell root `cwd` while preserving `shell_id` as execution-context identity. Running calls are process-local; only completed records are persisted. Logging and activity failures remain best-effort and do not replace original tool semantics.
+The activity projection groups calls by Shell root `cwd` while preserving `shell_id` as execution-context identity. Running calls are process-local; completed Shell lifecycle time is persisted independently of complete-call retention so history eviction cannot make an active Shell disappear. Logging and activity failures remain best-effort and do not replace original tool semantics.
 
-## Shared Browser Contracts (`src/contracts/`)
+## Shared API Contracts (`src/contracts/`)
 
-`src/contracts/` owns browser/server DTO shapes for the current Web API. These types describe JSON/SSE transport data only; they do not expose Express, React, SQLite, `ActivityTracker`, `ShellStore`, or other implementation objects. Runtime validation remains concentrated at genuinely untrusted inputs rather than re-validating responses produced by the same release.
+`src/contracts/` owns JSON/SSE DTO shapes shared by the server and bundled Web Console. These types describe the versioned transport contract without exposing Express, React, SQLite, `ActivityTracker`, `ShellStore`, or other implementation objects. External compatibility is protected by black-box API tests rather than by assuming shared TypeScript types constrain independent consumers.
 
-## Web Console HTTP and UI (`src/http/`, `web/`)
+## Observability API and Web Console (`src/api/`, `src/http/`, `web/`)
 
-The Web Console SPA is served from `/console/*` on the existing application listener. Browser JSON/SSE APIs are served from `/api/*`. Both namespaces share one HTTP Basic Auth boundary enabled by `WEB_PASSWORD`. When that Web surface is enabled, `GET /` is an unauthenticated, non-cacheable `302` convenience redirect to `/console/`; when disabled, the root remains unmounted. `/mcp` remains on its existing OAuth/local-mode authority boundary; Web credentials are not accepted there.
+The read-only Observability API is served from `/api/v1/*` on the existing application listener. In local mode it follows the loopback-only trust boundary and is mounted without another credential. In remote mode it is mounted when `OBSERVABILITY_TOKEN` or `WEB_PASSWORD` supplies read authority; it accepts the dedicated Bearer token and configured Web Basic credential. Neither authorizes `/mcp`.
+
+The Web Console SPA is served independently from `/console/*` when `WEB_PASSWORD` is configured. `GET /` then provides an unauthenticated, non-cacheable `302` convenience redirect to `/console/`; when the Web Console is disabled, the root remains unmounted. The browser consumes the same `/api/v1/*` contract as external monitors and scripts.
 
 `web/src/app/` owns application composition and routing; `web/src/features/` owns feature behavior; route modules compose feature pages; `web/src/lib/` contains narrow browser infrastructure. Components stay feature-local until demonstrated cross-feature reuse.
 
-The Activity model owns the ten-minute ACTIVE/EARLIER presentation rule and stable ordering independently of React. TanStack Query owns paged REST-like reads; completed SSE events invalidate affected Shell/workspace queries. The backend exposes facts and bounded history rather than server-side activity ranks.
+The backend activity policy owns the five-minute active/deadline semantics. The framework-independent browser Activity model owns only stable ACTIVE/EARLIER ordering and uses server-provided `active_until` for local expiry. TanStack Query owns paged reads; completed SSE events invalidate affected Shell/workspace queries.
 
 Production serves Vite's content-hashed assets from `dist/web/` and the compiled server from `dist/server/`. SPA fallback is limited to `/console`; missing assets, API paths, MCP paths, and OAuth paths never fall through to `index.html`.
 
@@ -131,17 +134,17 @@ Production serves Vite's content-hashed assets from `dist/web/` and the compiled
 
 ```text
 main -> config + http/app
-http/app -> auth + mcp + shell-store + skills + observability + activity-http
+http/app -> auth + mcp + shell-store + skills + observability + api/v1
 mcp -> tools + shell-store + skills + tool-call-recorder + host coordination
 shell -> shell-store + skills
 tools -> shell-store + skills + tool-call-recorder + host coordination
-tool-call-recorder -> tool-history-store + activity-tracker
-activity-http -> activity-query + activity-tracker
-activity-query -> shell-store + tool-history-store + activity-tracker
+tool-call-recorder -> observability-store + activity-tracker
+api/v1 -> observability-query + activity-tracker
+observability-query -> shell-store + observability-store + activity-tracker + activity-policy
 tools/lsp -> lsp + command-path
 lsp/client -> lsp/connection
 basic/read-image -> command-path
-web -> browser contracts + /api HTTP/SSE only
+web -> shared contracts + /api/v1 HTTP/SSE only
 ```
 
 Authorization may annotate request context for logging, but tool implementations do not depend on OAuth protocol services.

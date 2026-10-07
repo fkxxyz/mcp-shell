@@ -15,25 +15,43 @@ export type ToolCallSummaryDto = {
 
 export type ActivityShellDto = {
   shell_id: number;
-  last_event_at: string;
+  last_event_at: string | null;
   running_call_count: number;
+  active: boolean;
+  active_until: string | null;
 };
 
-export type ActivityWorkspaceDto = {
+export type ActivityWorkspacePresenceDto = {
   cwd: string;
-  last_event_at: string;
+  last_event_at: string | null;
   running_call_count: number;
+  active: boolean;
+  active_until: string | null;
+};
+
+export type ActivityWorkspaceDto = ActivityWorkspacePresenceDto & {
   recent_calls: ToolCallSummaryDto[];
   recent_shells: ActivityShellDto[];
 };
 
 export type ActivitySnapshotDto = {
   server_time: string;
+  active_window_ms: number;
   workspaces: ActivityWorkspaceDto[];
 };
 
 export type ActivityCallEventDto = {
   call: ToolCallSummaryDto;
+  server_time: string;
+  workspace_activity: ActivityWorkspacePresenceDto | null;
+  shell_activity: ActivityShellDto | null;
+};
+
+export type ShellActivityDto = ActivityShellDto & {
+  cwd: string;
+  created_at: string;
+  server_time: string;
+  active_window_ms: number;
 };
 
 export type ShellSummaryDto = {
