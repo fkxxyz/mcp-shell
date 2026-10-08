@@ -157,7 +157,7 @@ test("createShell lists skill summaries without loading skill instructions into 
     const result = await createShell(store, project, { globalAgentsPath: null, skillCatalog });
     assert.deepEqual(result.skills, [{ name: "writer", description: "Write polished text\nfrom rough notes.\n" }]);
     assert.match(result.instructions, /Available skills:\n- writer: Write polished text from rough notes\./);
-    assert.match(result.instructions, /Use the skill tool with an exact skill name/);
+    assert.match(result.instructions, /Use the skill tool with this shell_id and an exact skill name/);
     assert.doesNotMatch(result.instructions, /SECRET_SKILL_BODY/);
   } finally {
     store.close();

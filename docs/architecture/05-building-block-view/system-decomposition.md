@@ -72,23 +72,23 @@ In the local profile, this block is not on the `/mcp` request path; in remote pr
 
 `ShellStore` owns `~/.mcp-shell/shells.db`. Shell rows are addressed directly by integer `shell_id`; bounded `cwd` queries support the activity read model without making tool logs authoritative for Shell existence. SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` makes committed IDs monotonically increasing and never reused within one mcp-shell installation.
 
-`create_shell` requires an accessible absolute directory, reads `~/.agents/AGENTS.md` as global guidance when present, reads a root `AGENTS.md` as project guidance when present, discovers the current global Skill Catalog, commits the Shell, and returns its ID plus concise bootstrap instructions. Skill bodies are not injected; only valid skill names and descriptions are listed. Global guidance is returned before project guidance so the more specific project rules can override it. Neither `AGENTS.md` nor skill contents are copied into the database.
+`create_shell` requires an accessible absolute directory, reads `~/.agents/AGENTS.md` as global guidance when present, reads a root `AGENTS.md` as project guidance when present, discovers global and Shell-root `.agents/skills` entries, commits the Shell, and returns its ID plus concise bootstrap instructions. Skill bodies are not injected; only valid skill names and descriptions are listed. Global guidance is returned before project guidance so the more specific project rules can override it. Neither `AGENTS.md` nor skill contents are copied into the database.
 
 A Shell is independent from an MCP session and from project identity. Multiple Shells may have the same `cwd`; each remains a distinct durable execution context. There is no MCP operation to list or close Shells.
 
 ## Skill Catalog (`src/skills.ts`)
 
-`SkillCatalog` owns host-global skill discovery and loading under `~/.agents/skills`. It recursively walks directories, follows directory and `SKILL.md` symlinks including targets outside the skill root, and tracks real directories/files to terminate cycles and avoid duplicate physical traversal. A valid `SKILL.md` requires YAML frontmatter with non-empty string `name` and `description`; malformed, unreadable, or otherwise invalid entries are diagnosed and skipped without failing the catalog.
+`SkillCatalog` owns global skill discovery and loading under `~/.agents/skills`, plus per-Shell project discovery under `<shell cwd>/.agents/skills`. It recursively walks directories, follows directory and `SKILL.md` symlinks including targets outside the skill root, and tracks real directories/files within each source to terminate cycles and avoid duplicate physical traversal. A valid `SKILL.md` requires YAML frontmatter with non-empty string `name` and `description`; malformed, unreadable, or otherwise invalid entries are diagnosed and skipped without failing the catalog.
 
-Traversal is deterministic: each directory's entries are sorted by JavaScript string ordering and processed in order with immediate depth-first recursion. Every valid discovery updates the catalog by frontmatter `name`, so a later valid discovery deterministically replaces an earlier skill with the same name and emits a diagnostic identifying the shadowed source. Final summaries are sorted by name for presentation. Discovery and loading rescan the filesystem rather than persisting or caching skill state.
+Traversal is deterministic: each directory's entries are sorted by JavaScript string ordering and processed in order with immediate depth-first recursion. Global skills are scanned first; Shell-local skills are scanned second, so a valid local name overrides a global name. Every valid discovery updates the catalog by frontmatter `name`, so a later valid discovery replaces an earlier skill with the same name and emits a diagnostic identifying the shadowed source. Final summaries are sorted by name for presentation. Discovery and loading rescan the filesystem rather than persisting or caching skill state.
 
-The `skill` tool uses exact case-sensitive name matching and returns the full current `SKILL.md` plus the real path of the logical containing directory. For a symlinked `SKILL.md`, relative resources therefore remain based on the directory where that `SKILL.md` was discovered; for a symlinked skill directory, that directory resolves to its target.
+The `skill` tool uses exact case-sensitive name matching and optionally accepts `shell_id` to resolve the persisted Shell root and include its project skills. Without `shell_id`, it preserves global-only behavior; it never selects another project's skills. It returns the full current `SKILL.md` plus the real path of the logical containing directory. For a symlinked `SKILL.md`, relative resources therefore remain based on the directory where that `SKILL.md` was discovered; for a symlinked skill directory, that directory resolves to its target.
 
 ## Host Tools (`src/tools/`)
 
 Tool registration is modular:
 
-- `skill.ts`: lazy loading of one globally discovered skill;
+- `skill.ts`: lazy loading of one global or Shell-scoped skill;
 - `basic.ts`: MCP registration for application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`;
 - `apply-patch.ts`: structured patch application;
 - `read-image.ts`: image inspection;

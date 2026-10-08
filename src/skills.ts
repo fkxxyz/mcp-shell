@@ -54,15 +54,15 @@ export class SkillCatalog {
     });
   }
 
-  async discover(): Promise<SkillSummary[]> {
-    const records = await this.scan();
+  async discover(projectCwd?: string): Promise<SkillSummary[]> {
+    const records = await this.scan(projectCwd);
     return [...records.values()]
       .map(({ name, description }) => ({ name, description }))
       .sort((left, right) => compareEntryNames(left.name, right.name));
   }
 
-  async load(name: string): Promise<Skill | null> {
-    const record = (await this.scan()).get(name);
+  async load(name: string, projectCwd?: string): Promise<Skill | null> {
+    const record = (await this.scan(projectCwd)).get(name);
     if (!record) return null;
     return {
       name: record.name,
@@ -77,12 +77,18 @@ export class SkillCatalog {
     this.onDiagnostic({ path, reason });
   }
 
-  private async scan(): Promise<Map<string, SkillRecord>> {
+  private async scan(projectCwd?: string): Promise<Map<string, SkillRecord>> {
     const records = new Map<string, SkillRecord>();
-    const visitedDirectories = new Set<string>();
-    const visitedFiles = new Set<string>();
+    const roots = [this.root];
+    if (projectCwd !== undefined) {
+      const projectRoot = join(projectCwd, ".agents", "skills");
+      if (projectRoot !== this.root) roots.push(projectRoot);
+    }
 
-    await this.walkDirectory(this.root, records, visitedDirectories, visitedFiles, true);
+    for (const root of roots) {
+      // Each source has its own traversal: project symlinks may target global skills.
+      await this.walkDirectory(root, records, new Set(), new Set(), true);
+    }
     return records;
   }
 

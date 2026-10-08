@@ -54,13 +54,13 @@ export async function createShell(
   const projectAgentsMd = globalAgentsPath !== null && resolve(globalAgentsPath) === projectAgentsPath
     ? null
     : await readAgentsFile(projectAgentsPath);
-  const skills = await options.skillCatalog.discover();
+  const skills = await options.skillCatalog.discover(cwd);
 
   const shell = store.create(cwd);
   const base = `Shell ${shell.id} is rooted at ${cwd}.\n\nKeep using shell ID ${shell.id} for all subsequent operations while working in this directory.\nDo not call create_shell again unless the required working directory changes.\nTell the user that the shell ID for this session is ${shell.id}.\n\nPrefer relative paths.`;
   const skillIndex = skills.length === 0
     ? ""
-    : `\n\nAvailable skills:\n${skills.map((skill) => `- ${skill.name}: ${skill.description.replace(/\s+/g, " ").trim()}`).join("\n")}\n\nUse the skill tool with an exact skill name to load its instructions when relevant.`;
+    : `\n\nAvailable skills:\n${skills.map((skill) => `- ${skill.name}: ${skill.description.replace(/\s+/g, " ").trim()}`).join("\n")}\n\nUse the skill tool with this shell_id and an exact skill name to load its instructions when relevant.`;
   const global = globalAgentsMd === null
     ? ""
     : `\n\nGlobal instructions from ~/.agents/AGENTS.md:\n\n${globalAgentsMd.trimEnd()}`;

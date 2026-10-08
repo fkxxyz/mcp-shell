@@ -25,7 +25,7 @@ export function registerTools(
   lspManager: LSPServerManager,
 ) {
 	registerShellTool(server, invocations, shells, recorder, skills);
-	registerSkillTool(server, invocations, recorder, skills);
+	registerSkillTool(server, invocations, recorder, shells, skills);
 	registerBasicTools(server, invocations, shells, recorder, commandPath, mutations, processes);
 	registerApplyPatchTool(server, invocations, shells, recorder, mutations);
 	registerLspTools(server, invocations, shells, recorder, commandPath, mutations, lspManager);

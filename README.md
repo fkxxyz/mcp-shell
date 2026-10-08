@@ -221,15 +221,15 @@ The remote authorization model is intentionally simple: one configured OAuth cli
 
 ### Create a Shell
 
-Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. Available skills discovered under `~/.agents/skills` are listed by `name` and `description` only. If `~/.agents/AGENTS.md` exists, those global instructions are included before a root project `AGENTS.md`, so the more specific project guidance has precedence.
+Before normal host operations, call `create_shell` with the absolute directory for the current agent session. It returns a persistent integer `shell_id` and concise bootstrap instructions. Available skills discovered under `~/.agents/skills` and `<shell cwd>/.agents/skills` are listed by `name` and `description` only. If `~/.agents/AGENTS.md` exists, those global instructions are included before a root project `AGENTS.md`, so the more specific project guidance has precedence.
 
 Pass that `shell_id` on subsequent operations and prefer paths relative to the Shell root. Creating another Shell for the same directory is valid and produces a distinct execution context.
 
 ### Load a Skill
 
-Skills are `SKILL.md` files anywhere under `~/.agents/skills`. Discovery is recursive, follows symbolic links, and requires non-empty YAML frontmatter `name` and `description` fields. Invalid skills are skipped without preventing Shell creation.
+Skills are `SKILL.md` files anywhere under the global `~/.agents/skills` directory or the current Shell root's `.agents/skills` directory. Discovery is recursive, follows symbolic links, and requires non-empty YAML frontmatter `name` and `description` fields. Invalid skills are skipped without preventing Shell creation. Within each source, last valid duplicate wins; a valid project-local skill overrides a global skill with the same name.
 
-Call `skill` with an exact skill name from the `create_shell` list. The tool rescans the current skill tree, then returns the complete `SKILL.md` plus the resolved skill directory for relative resources. Skill names are case-sensitive. When multiple valid skills use the same name, deterministic depth-first discovery applies and the last discovered skill wins.
+Call `skill` with both `name` (exact, case-sensitive) and `shell_id` returned by `create_shell`. The tool rescans the global and matching project skill trees, then returns the complete `SKILL.md` plus the resolved skill directory for relative resources. Omitting `shell_id` retains legacy global-only loading. The skill list and contents are read from the current filesystem, so changes after Shell creation are reflected in subsequent loads.
 
 ## Local state
 
