@@ -16,15 +16,15 @@ function request(headers: Record<string, string | string[] | undefined>, body: u
   return { headers, body } as Pick<Request, "headers" | "body">;
 }
 
-test("standard MCP client names and header-based vendor sessions are independent", () => {
+test("standard MCP client names and vendor logical sessions are independent", () => {
   const meta = { method: "tools/call", params: { _meta: { "openai/session": "meta-session" } } };
   assert.deepEqual(resolveClientIdentity("generic-client", request({}, meta)), {
     clientName: "generic-client",
-    clientSessionId: undefined,
+    clientSessionId: "openai:meta-session",
   });
-  assert.deepEqual(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "header-session" }, meta)), {
+  assert.deepEqual(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "meta-session" }, meta)), {
     clientName: "ChatGPT",
-    clientSessionId: "openai:header-session",
+    clientSessionId: "openai:meta-session",
   });
   assert.deepEqual(resolveClientIdentity("other-client", request({}, { method: "tools/call" })), {
     clientName: "other-client",
@@ -33,14 +33,37 @@ test("standard MCP client names and header-based vendor sessions are independent
   assert.equal(resolveClientIdentity(undefined, request({}, meta)).clientName, undefined);
 });
 
-test("OpenAI _meta alone never supplies identity or overrides canonical session header", () => {
-  const meta = { method: "tools/call", params: { _meta: { "openai/session": "different-opaque-value" } } };
-  const fromHeader = resolveClientIdentity("ChatGPT", request({ "x-openai-session": "canonical" }, meta));
-  const withoutHeader = resolveClientIdentity("ChatGPT", request({}, meta));
-  const emptyHeader = resolveClientIdentity("ChatGPT", request({ "x-openai-session": "" }, meta));
-  assert.equal(fromHeader.clientSessionId, "openai:canonical");
-  assert.equal(withoutHeader.clientSessionId, undefined);
-  assert.equal(emptyHeader.clientSessionId, undefined);
+test("OpenAI _meta is canonical, with header fallback for missing or invalid metadata", () => {
+  const meta = { method: "tools/call", params: { _meta: { "openai/session": "canonical" } } };
+  assert.equal(resolveClientIdentity("ChatGPT", request({}, meta)).clientSessionId, "openai:canonical");
+  assert.equal(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "canonical" }, meta)).clientSessionId, "openai:canonical");
+  assert.equal(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "fallback" }, {
+    method: "tools/call", params: { _meta: { "openai/session": " invalid" } },
+  })).clientSessionId, "openai:fallback");
+  assert.equal(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "fallback" }, {
+    method: "tools/call", params: { _meta: { "openai/session": 42 } },
+  })).clientSessionId, "openai:fallback");
+  assert.equal(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "fallback" }, {
+    method: "tools/call", params: { _meta: null },
+  })).clientSessionId, "openai:fallback");
+  assert.equal(resolveClientIdentity("ChatGPT", request({ "x-openai-session": "fallback" }, {
+    method: "tools/call", params: {}, _meta: { "openai/session": "wrong-level" },
+  })).clientSessionId, "openai:fallback");
+});
+
+test("conflicting valid hints prefer _meta and only emit a redacted warning", () => {
+  const warnings: string[] = [];
+  const previousWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+  try {
+    const meta = { method: "tools/call", params: { _meta: { "openai/session": "private-meta-value" } } };
+    const identity = resolveClientIdentity("ChatGPT", request({ "x-openai-session": "private-header-value" }, meta));
+    assert.equal(identity.clientSessionId, "openai:private-meta-value");
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings.every((warning) => !warning.includes("private-meta-value") && !warning.includes("private-header-value")));
+  } finally {
+    console.warn = previousWarn;
+  }
 });
 
 test("malformed, oversized or ambiguous identity hints never invent sessions", () => {
@@ -49,6 +72,9 @@ test("malformed, oversized or ambiguous identity hints never invent sessions", (
     assert.equal(resolveClientIdentity("client", request({ "x-openai-session": value }, body)).clientSessionId, undefined);
   }
   assert.equal(resolveClientIdentity("ignored", request({ "x-openai-session": ["a", "b"] }, body)).clientSessionId, undefined);
+  assert.equal(resolveClientIdentity("ignored", request({}, { method: "tools/call", params: {
+    _meta: { "openai/session": "x".repeat(257) },
+  } })).clientSessionId, undefined);
   assert.equal(resolveClientIdentity("invalid\nclient", request({}, {})).clientName, undefined);
   assert.equal(resolveClientIdentity("client", request({ "x-openai-session": "header" }, [
     { method: "tools/call", params: { _meta: { "openai/session": "one" } } },
@@ -106,9 +132,11 @@ test("HTTP MCP client identity survives reconnect and process restart without me
   const second = await connect("example-agent", "conversation-a");
   await second.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" } });
   const third = await connect("other-agent", "conversation-b");
-  await third.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" } });
+  await third.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" },
+    _meta: { "openai/session": "conversation-b-meta" } });
   const generic = await connect("generic-mcp-client");
-  await generic.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" } });
+  await generic.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" },
+    _meta: { "openai/session": "conversation-meta-only" } });
 
   const response = await fetch(baseUrl + `/api/v1/shells/${shellId}/calls`);
   assert.equal(response.status, 200);
@@ -116,8 +144,8 @@ test("HTTP MCP client identity survives reconnect and process restart without me
     id: string; client_name: string | null; client_session_id: string | null;
   }> };
   assert.deepEqual(history.items.map(({ client_name, client_session_id }) => [client_name, client_session_id]), [
-    ["generic-mcp-client", null],
-    ["other-agent", "openai:conversation-b"],
+    ["generic-mcp-client", "openai:conversation-meta-only"],
+    ["other-agent", "openai:conversation-b-meta"],
     ["example-agent", "openai:conversation-a"],
     ["example-agent", "openai:conversation-a"],
     ["example-agent", "openai:conversation-a"],

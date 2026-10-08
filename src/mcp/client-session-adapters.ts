@@ -6,12 +6,24 @@ export function resolveClientSessionHint(req: Pick<Request, "body" | "headers">)
   return openai ? `openai:${openai}` : undefined;
 }
 
+let reportedSessionConflict = false;
+
 function resolveOpenAISession(req: Pick<Request, "body" | "headers">): string | undefined {
-  // The live probe cannot establish equality between x-openai-session and
-  // params._meta["openai/session"]: the temporary diagnostic hashed raw header
-  // strings but JSON-stringified metadata values. An unverified fallback could
-  // split a logical session. Only the header is currently a canonical source.
-  return validSessionId(req.headers["x-openai-session"]);
+  const params = isRecord(req.body) && isRecord(req.body.params) ? req.body.params : undefined;
+  const metadata = params && isRecord(params._meta) ? validSessionId(params._meta["openai/session"]) : undefined;
+  const header = validSessionId(req.headers["x-openai-session"]);
+
+  if (metadata && header && metadata !== header && !reportedSessionConflict) {
+    reportedSessionConflict = true;
+    // No raw identifiers: they are client-supplied and potentially sensitive.
+    console.warn("OpenAI logical session hints disagree; preferring MCP params._meta");
+  }
+
+  return metadata ?? header;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function validSessionId(value: unknown): string | undefined {
