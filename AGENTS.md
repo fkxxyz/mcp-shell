@@ -21,10 +21,37 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `src/lsp/` contains the reusable LSP runtime boundaries: `connection.ts` owns stdio/JSON-RPC lifecycle, while `client.ts` owns initialization, capabilities, document synchronization, feature requests, and diagnostics convergence.
 - `src/host/` contains narrow cross-tool host mechanisms for path resolution, structured file-mutation coordination, and supervised child-process lifecycle.
 - `web/` is the React + TypeScript Web Console built by Vite. TanStack Router owns routes, TanStack Query owns request-derived server state, and the Activity feature keeps SSE/live ordering logic feature-local.
+- `docs/architecture/` contains architecture Views and navigation/governance metadata.
+- `archdoc.ts` is the architecture documentation navigator and structural validator.
 - Express handles HTTP routes and form/JSON parsing.
 - `@modelcontextprotocol/sdk` implements the MCP server and Streamable HTTP transport.
 - OAuth authorization codes, access tokens, and refresh tokens are held in memory and persisted to `~/.mcp-shell/state.json` using atomic rename. The config and state directory/files are created with restrictive permissions.
 - MCP transports are kept in a process-local map keyed by MCP session ID. Restarting the process ends active sessions; persisted OAuth tokens can remain valid.
+
+## Architecture Workflow
+
+Before repository work, run:
+
+```sh
+bun archdoc.ts --help
+```
+
+Use `archdoc` to discover the Views relevant to the task before reviewing or changing implementation:
+
+```sh
+bun archdoc.ts choices --stakeholder developer
+bun archdoc.ts views --stakeholder developer --concern <concern> --activity <activity> --facet domain=<domain> [--viewpoint <viewpoint>]
+```
+
+Choose valid values and reachable combinations from `choices`. Read the relevant returned Markdown files; `views` returns paths and summaries, not document contents.
+
+When architecture documentation changes, validate it with:
+
+```sh
+bun archdoc.ts check
+```
+
+`check` validates document structure and navigation relationships. Confirm architectural claims against implementation and tests.
 
 ## Request Flow
 
