@@ -5,11 +5,11 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { migrateLegacyToolLogs } from "./legacy-tool-log-import.js";
-import type { FinishedToolCallSummary, ToolCallRecord } from "./tool-call.js";
+import type { ClientSessionKey, FinishedToolCallSummary, ToolCallRecord } from "./tool-call.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const RETENTION_BATCH_SIZE = 1_000;
 
 export type ToolHistoryCursor = {
@@ -69,6 +69,8 @@ export class ObservabilityStore {
   private db: DatabaseSync | undefined;
   private insertCall: StatementSync | undefined;
   private upsertShellActivity: StatementSync | undefined;
+  private insertSessionShell: StatementSync | undefined;
+  private activityInitialization: Promise<void> | undefined;
   private initialization: Promise<void> | undefined;
   private closed = false;
   private retainedCount = 0;
@@ -89,6 +91,12 @@ export class ObservabilityStore {
     return this.initialization;
   }
 
+  initializeActivity(): Promise<void> {
+    if (this.closed) return Promise.reject(new Error("Observability store is closed"));
+    this.activityInitialization ??= this.openActivityDatabase();
+    return this.activityInitialization;
+  }
+
   async persist(
     record: ToolCallRecord,
     inputPreview?: Record<string, unknown>,
@@ -104,13 +112,6 @@ export class ObservabilityStore {
       db.exec("BEGIN IMMEDIATE");
       try {
         this.requireInsertCall().run(...metadataParams(record, inputPreview, payloadPath, compressed.byteLength));
-        if (record.shell_id != null && record.cwd) {
-          this.requireUpsertShellActivity().run(
-            record.shell_id,
-            record.cwd,
-            Date.parse(record.finished_at),
-          );
-        }
         const nextCount = this.retainedCount + 1;
         const excess = Math.max(0, nextCount - this.maxCalls);
         victims = this.deleteOldestRows(excess);
@@ -182,6 +183,41 @@ export class ObservabilityStore {
     };
   }
 
+  assertActivityAvailable(): void {
+    this.requireDb();
+  }
+
+  linkSessionShell(session: ClientSessionKey, shellId: number): void {
+    if (!this.insertSessionShell) throw new Error("Observability store is not initialized");
+    this.insertSessionShell.run(session.clientId, session.clientSessionId, shellId);
+  }
+
+  recordShellActivity(activity: ShellActivityRecord, session?: ClientSessionKey): void {
+    const db = this.requireDb();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (session) this.linkSessionShell(session, activity.shellId);
+      this.requireUpsertShellActivity().run(activity.shellId, activity.cwd, activity.lastEventAt);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listSessionShellActivity(shellId: number): Array<{ shellId: number; lastEventAt: number | null }> {
+    const rows = this.requireDb().prepare(`
+      SELECT DISTINCT member.shell_id, activity.last_event_at_ms
+      FROM session_shells AS source
+      JOIN session_shells AS member
+        ON member.client_id = source.client_id
+       AND member.client_session_id = source.client_session_id
+      LEFT JOIN shell_activity AS activity ON activity.shell_id = member.shell_id
+      WHERE source.shell_id = ?
+    `).all(shellId) as Array<{ shell_id: number; last_event_at_ms: number | null }>;
+    return rows.map((row) => ({ shellId: row.shell_id, lastEventAt: row.last_event_at_ms }));
+  }
+
   getShellActivity(shellId: number): ShellActivityRecord | undefined {
     const row = this.requireDb().prepare(`
       SELECT shell_id, cwd, last_event_at_ms
@@ -239,38 +275,46 @@ export class ObservabilityStore {
   private closeDatabase(): void {
     this.insertCall = undefined;
     this.upsertShellActivity = undefined;
+    this.insertSessionShell = undefined;
     this.db?.close();
     this.db = undefined;
   }
 
-  private async initializeOnce(): Promise<void> {
+  private async openActivityDatabase(): Promise<void> {
     await mkdir(this.logDir, { recursive: true, mode: 0o700 });
     await chmod(this.logDir, 0o700);
-    await mkdir(this.payloadRoot, { recursive: true, mode: 0o700 });
-    await chmod(this.payloadRoot, 0o700);
-
     const db = new DatabaseSync(this.dbFile);
     this.db = db;
     try {
       this.initializeSchema(db);
       await chmod(this.dbFile, 0o600);
       this.prepareStatements(db);
-      const legacyImport = await migrateLegacyToolLogs(
-        this.logDir,
-        db,
-        (relativePath, compressed) => this.publishPayloadIfMissing(relativePath, compressed),
-      );
-      if (legacyImport.imported > 0) this.backfillShellActivityFromHistory();
-      this.retainedCount = Number(
-        (db.prepare("SELECT COUNT(*) AS count FROM tool_calls").get() as { count: number }).count,
-      );
-      const victims = this.deleteOldestRows(Math.max(0, this.retainedCount - this.maxCalls));
-      this.retainedCount -= victims.length;
-      await this.removePayloads(victims.map((victim) => victim.payload_path));
     } catch (error) {
       this.closeDatabase();
       throw error;
     }
+  }
+
+  private async initializeOnce(): Promise<void> {
+    await this.initializeActivity();
+    // Payload setup/import failures degrade history without closing usable activity state.
+    await mkdir(this.payloadRoot, { recursive: true, mode: 0o700 });
+    await chmod(this.payloadRoot, 0o700);
+    const db = this.requireDb();
+    const legacyImport = await migrateLegacyToolLogs(
+      this.logDir, db,
+      (relativePath, compressed) => this.publishPayloadIfMissing(relativePath, compressed),
+    );
+    if (legacyImport.imported > 0) {
+      this.backfillShellActivityFromHistory();
+      this.backfillSessionShellsFromHistory(db);
+    }
+    this.retainedCount = Number(
+      (db.prepare("SELECT COUNT(*) AS count FROM tool_calls").get() as { count: number }).count,
+    );
+    const victims = this.deleteOldestRows(Math.max(0, this.retainedCount - this.maxCalls));
+    this.retainedCount -= victims.length;
+    await this.removePayloads(victims.map((victim) => victim.payload_path));
   }
 
   private initializeSchema(db: DatabaseSync): void {
@@ -342,7 +386,7 @@ export class ObservabilityStore {
       `);
     }
 
-    if (currentVersion < 3) {
+    if (currentVersion < SCHEMA_VERSION) {
       // Keep the schema update and version advancement atomic, including when
       // upgrading existing v1/v2 databases with retained history.
       const columns = new Set(
@@ -352,6 +396,17 @@ export class ObservabilityStore {
       try {
         if (!columns.has("client_name")) db.exec("ALTER TABLE tool_calls ADD COLUMN client_name TEXT");
         if (!columns.has("client_session_id")) db.exec("ALTER TABLE tool_calls ADD COLUMN client_session_id TEXT");
+        db.exec(`
+          CREATE TABLE session_shells (
+            client_id TEXT NOT NULL,
+            client_session_id TEXT NOT NULL,
+            shell_id INTEGER NOT NULL,
+            PRIMARY KEY (client_id, client_session_id, shell_id)
+          ) WITHOUT ROWID;
+          CREATE INDEX session_shells_by_shell
+            ON session_shells(shell_id, client_id, client_session_id);
+        `);
+        this.backfillSessionShellsFromHistory(db);
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
         db.exec("COMMIT");
       } catch (error) {
@@ -371,6 +426,10 @@ export class ObservabilityStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     this.insertCall = db.prepare(sql);
+    this.insertSessionShell = db.prepare(`
+      INSERT OR IGNORE INTO session_shells (client_id, client_session_id, shell_id)
+      VALUES (?, ?, ?)
+    `);
     this.upsertShellActivity = db.prepare(`
       INSERT INTO shell_activity (shell_id, cwd, last_event_at_ms)
       VALUES (?, ?, ?)
@@ -378,6 +437,16 @@ export class ObservabilityStore {
         cwd = excluded.cwd,
         last_event_at_ms = excluded.last_event_at_ms
       WHERE excluded.last_event_at_ms >= shell_activity.last_event_at_ms
+    `);
+  }
+
+  private backfillSessionShellsFromHistory(db: DatabaseSync): void {
+    db.exec(`
+      INSERT OR IGNORE INTO session_shells (client_id, client_session_id, shell_id)
+      SELECT DISTINCT client_name, client_session_id, shell_id
+      FROM tool_calls
+      WHERE shell_id IS NOT NULL AND cwd IS NOT NULL
+        AND client_name IS NOT NULL AND client_session_id IS NOT NULL;
     `);
   }
 

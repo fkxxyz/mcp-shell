@@ -50,6 +50,7 @@ export class ActivityTracker {
   private readonly running = new Map<string, ToolCallSummary>();
   private readonly completed: ToolCallSummary[] = [];
   private readonly byId = new Map<string, ToolCallSummary>();
+  private readonly pendingHistory = new Set<string>();
   private readonly shellActivity = new Map<number, ShellActivityState>();
   private readonly subscribers = new Set<ActivityFeed>();
   private readonly maxRecentPerWorkspace: number;
@@ -99,7 +100,18 @@ export class ActivityTracker {
   }
 
   finished(call: FinishedToolCallSummary): void {
+    this.pendingHistory.delete(call.id);
     this.applyFinished(call, true);
+  }
+
+  /** Advance the projection immediately; publish detail availability after history settles. */
+  complete(call: FinishedToolCallSummary): void {
+    this.pendingHistory.add(call.id);
+    this.applyFinished(call, false);
+  }
+
+  isHistoryPending(id: string): boolean {
+    return this.pendingHistory.has(id);
   }
 
   markCallsEvicted(callIds: string[]): void {

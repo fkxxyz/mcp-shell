@@ -63,6 +63,14 @@ export type ShellSummaryDto = {
   last_activity_at: string | null;
 };
 
+/** Aggregate presence of the sessions directly associated with the requested Shell. */
+export type ShellSessionActivityDto = {
+  shell_id: number;
+  active: boolean;
+  active_until: string | null;
+  server_time: string;
+};
+
 export type WorkspaceShellsDto = {
   cwd: string;
   items: ShellSummaryDto[];

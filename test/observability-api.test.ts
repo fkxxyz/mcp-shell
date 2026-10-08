@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -97,6 +98,12 @@ test("remote observability API accepts its bearer token without enabling Web Con
   });
   assert.equal(authorized.status, 200);
   assert.equal(authorized.headers.get("cache-control"), "no-store");
+  assert.equal((await fetch(ctx.baseUrl + "/api/v1/shells/1/session-activity")).status, 401);
+  const missing = await fetch(ctx.baseUrl + "/api/v1/shells/1/session-activity", {
+    headers: { authorization: OBS_BEARER },
+  });
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).error.code, "shell_not_found");
 });
 
 test("remote API accepts Web Basic when configured and both read credentials can coexist", async (t) => {
@@ -231,6 +238,149 @@ test("MCP tool calls appear in v1 activity, Shell status, history, detail, and S
   assert.ok(received.includes('"active_until"'));
   controller.abort();
   await reader.cancel().catch(() => {});
+});
+
+test("Shell session activity aggregates client-scoped use and survives restart with broken history", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-session-api-"));
+  await writeFile(join(dir, "hello.txt"), "hello");
+  const config = makeLocalConfig(dir);
+  config.toolLogs.maxCalls = 1;
+  let ctx = await listen(config);
+  const clients: Client[] = [];
+  t.after(async () => {
+    await Promise.all(clients.map((client) => client.close().catch(() => {})));
+    await cleanup(ctx, dir);
+  });
+  async function connect(name: string) {
+    const client = new Client({ name, version: "1.0.0" });
+    clients.push(client);
+    await client.connect(new StreamableHTTPClientTransport(new URL(ctx.baseUrl + "/mcp"), {
+      requestInit: { headers: { "x-openai-session": "same-session-id" } },
+    }));
+    return client;
+  }
+  async function create(client: Client) {
+    const result = await client.callTool({ name: "create_shell", arguments: { cwd: dir } });
+    return Number((result.structuredContent as { shell_id: number }).shell_id);
+  }
+  async function read(client: Client, shellId: number) {
+    const result = await client.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" } });
+    assert.equal(result.isError, undefined);
+  }
+  async function status(shellId: number) {
+    const response = await fetch(ctx.baseUrl + `/api/v1/shells/${shellId}/session-activity`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const result = await response.json();
+    assert.deepEqual(Object.keys(result).sort(), ["active", "active_until", "server_time", "shell_id"]);
+    assert.equal(result.shell_id, shellId);
+    assert.ok(Number.isFinite(Date.parse(result.server_time)));
+    return result;
+  }
+  function expire() {
+    const db = new DatabaseSync(join(config.toolLogs.dir, "history.db"));
+    try {
+      db.prepare("UPDATE shell_activity SET last_event_at_ms = ?").run(Date.now() - 5 * 60 * 1000 - 1000);
+    } finally {
+      db.close();
+    }
+  }
+
+  const a = await connect("client-a");
+  const b = await connect("client-b");
+  const a1 = await create(a);
+  const a2 = await create(a);
+  const b1 = await create(b);
+  assert.equal((await status(a1)).active, true, "create_shell alone establishes active membership");
+  expire();
+  assert.equal((await status(a1)).active, false);
+  await read(b, b1);
+  assert.equal((await status(a1)).active, false, "same session string on another client is isolated");
+  const a3 = await create(a);
+  const a3Own = await (await fetch(ctx.baseUrl + `/api/v1/shells/${a3}/activity`)).json();
+  assert.equal((await status(a1)).active_until, a3Own.active_until);
+  const a1Own = await (await fetch(ctx.baseUrl + `/api/v1/shells/${a1}/activity`)).json();
+  assert.equal(a1Own.active, false, "session presence does not change Shell's own presence");
+  const running = a.callTool({ name: "bash", arguments: { shell_id: a3, command: "sleep 0.4" } });
+  try {
+    let runningCount = 0;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const own = await (await fetch(ctx.baseUrl + `/api/v1/shells/${a3}/activity`)).json();
+      runningCount = own.running_call_count;
+      if (runningCount > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(runningCount, 1);
+    const activeWhileRunning = await status(a1);
+    assert.equal(activeWhileRunning.active, true);
+    assert.equal(activeWhileRunning.active_until, null);
+  } finally {
+    await running;
+  }
+  await read(b, a2);
+  expire();
+  await read(b, b1);
+  assert.equal((await status(a2)).active, true, "shared Shell includes both directly associated sessions");
+  assert.equal((await status(a1)).active, false, "shared membership does not cause transitive propagation");
+
+  for (const invalid of ["0", "-1", "abc"]) {
+    const response = await fetch(ctx.baseUrl + `/api/v1/shells/${invalid}/session-activity`);
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "invalid_request");
+  }
+  const unknown = await fetch(ctx.baseUrl + "/api/v1/shells/999999/session-activity");
+  assert.equal(unknown.status, 404);
+  assert.equal((await unknown.json()).error.code, "shell_not_found");
+
+  await Promise.all(clients.map((client) => client.close().catch(() => {})));
+  await new Promise<void>((resolve) => ctx.server.close(() => resolve()));
+  await ctx.runtime.close();
+  await rm(join(config.toolLogs.dir, "payloads"), { recursive: true });
+  await writeFile(join(config.toolLogs.dir, "payloads"), "blocked payload directory");
+  t.mock.method(console, "error", () => {});
+  ctx = await listen(config);
+  assert.equal((await status(a2)).active, true);
+  assert.equal((await status(a1)).active, false);
+  const ownAfterRestart = await (await fetch(ctx.baseUrl + `/api/v1/shells/${b1}/activity`)).json();
+  assert.equal(ownAfterRestart.running_call_count, 0);
+  assert.equal(ownAfterRestart.active, true);
+  expire();
+  assert.equal((await status(a2)).active, false);
+});
+
+test("activity storage failure returns 503 without replacing host tool results or history", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-session-api-failure-"));
+  await writeFile(join(dir, "hello.txt"), "hello");
+  const config = makeLocalConfig(dir);
+  const ctx = await listen(config);
+  const client = new Client({ name: "activity-failure-client", version: "1.0.0" });
+  t.after(async () => { await client.close().catch(() => {}); await cleanup(ctx, dir); });
+  await client.connect(new StreamableHTTPClientTransport(new URL(ctx.baseUrl + "/mcp"), {
+    requestInit: { headers: { "x-openai-session": "session" } },
+  }));
+  const created = await client.callTool({ name: "create_shell", arguments: { cwd: dir } });
+  const shellId = Number((created.structuredContent as { shell_id: number }).shell_id);
+  const db = new DatabaseSync(join(config.toolLogs.dir, "history.db"));
+  try {
+    db.exec(`CREATE TRIGGER fail_activity BEFORE INSERT ON shell_activity
+      BEGIN SELECT RAISE(ABORT, 'test activity persistence failure'); END;`);
+  } finally {
+    db.close();
+  }
+  t.mock.method(console, "error", () => {});
+  const read = await client.callTool({ name: "read", arguments: { shell_id: shellId, path: "hello.txt" } });
+  assert.equal(read.isError, undefined);
+  const failure = await client.callTool({ name: "read", arguments: { shell_id: shellId, path: "missing.txt" } });
+  assert.equal(failure.isError, true);
+  assert.match(JSON.stringify(failure.content), /ENOENT/);
+  for (const path of [
+    `/shells/${shellId}/session-activity`, `/shells/${shellId}/activity`, "/activity", "/activity/stream",
+  ]) {
+    const response = await fetch(ctx.baseUrl + "/api/v1" + path);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, "activity_unavailable");
+  }
+  assert.equal((await fetch(ctx.baseUrl + `/api/v1/shells/${shellId}/calls`)).status, 200);
 });
 
 test("read-only credentials never authorize remote MCP", async (t) => {

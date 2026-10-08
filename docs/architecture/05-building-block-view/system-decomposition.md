@@ -108,11 +108,11 @@ Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root 
 
 ## Observability (`src/observability/`)
 
-`ToolCallRecorder` owns the recorded invocation lifecycle. `ObservabilityStore` owns durable completed-call history plus latest completed per-Shell activity: SQLite metadata, sharded gzip payloads, retention, migration, and history queries. `ActivityTracker` owns process-local running state, active-window Shell presence, bounded live/recent calls, and subscribers. `activity-policy.ts` owns the five-minute active rule. `ObservabilityQuery` composes API read models from durable Shell/observability authorities plus live Activity state.
+`ToolCallRecorder` owns the recorded invocation lifecycle. `ActivityService` owns authoritative process-local running Shell calls and derives Shell/session point presence. `ObservabilityStore` owns durable completed-call history, latest completed per-Shell activity, and persistent client-scoped session/Shell usage relationships. It provides independent activity and full-history write paths within the existing SQLite database. `ActivityTracker` owns the bounded live/recent projection, workspace presence, and subscribers. `activity-policy.ts` owns the five-minute active rule. `ObservabilityQuery` composes API read models from those authorities.
 
 Complete call payloads remain gzip-compressed in date-sharded files while `history.db` stores compact indexed metadata and bounded previews. Startup reads only the bounded recent summary window needed for Activity bootstrap; retained Shell history remains queryable independently of that live/recent window.
 
-The activity projection groups calls by Shell root `cwd` while preserving `shell_id` as execution-context identity. Running calls are process-local; completed Shell lifecycle time is persisted independently of complete-call retention so history eviction cannot make an active Shell disappear. Logging and activity failures remain best-effort and do not replace original tool semantics.
+The activity projection groups calls by Shell root `cwd` while preserving `shell_id` as execution-context identity. Running calls are process-local; completed Shell lifecycle time and usage relationships are persisted independently of payload writes and complete-call retention. Session identity combines the unique declared client name with the logical session ID. Shell-to-session queries aggregate directly related sessions' member Shells without recursively merging sessions. Logging and activity failures preserve original tool semantics; failed activity state produces explicit unavailable responses.
 
 ## Shared API Contracts (`src/contracts/`)
 
@@ -138,9 +138,10 @@ http/app -> auth + mcp + shell-store + skills + observability + api/v1
 mcp -> tools + shell-store + skills + tool-call-recorder + host coordination
 shell -> shell-store + skills
 tools -> shell-store + skills + tool-call-recorder + host coordination
-tool-call-recorder -> observability-store + activity-tracker
+tool-call-recorder -> observability-store + activity-service + activity-tracker
+activity-service -> observability-store + activity-policy
 api/v1 -> observability-query + activity-tracker
-observability-query -> shell-store + observability-store + activity-tracker + activity-policy
+observability-query -> shell-store + observability-store + activity-service + activity-tracker + activity-policy
 tools/lsp -> lsp + command-path
 lsp/client -> lsp/connection
 basic/read-image -> command-path

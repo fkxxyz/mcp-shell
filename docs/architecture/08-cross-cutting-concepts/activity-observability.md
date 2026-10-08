@@ -49,6 +49,14 @@ No durable Workspace entity is introduced.
 - The OpenAI-specific adapter prefers valid `params._meta["openai/session"]` and falls back to valid `x-openai-session` when metadata is absent or invalid. Both use the same `openai:<opaque value>` namespace; no schema or historical ID rewrite is required. A 2026-10-08 one-request raw-value probe confirmed byte-for-byte equality for both sources, and the preceding Journal diagnostic found a consistent one-to-one grouping over 670 paired requests. These observations do not guarantee future vendor behavior: if both valid sources disagree, metadata wins and one value-free warning per process is emitted. Missing/invalid hints or ambiguous batches leave the logical-session field null. The existing `session` remains the MCP transport session ID. No vendor-specific rules belong in the generic resolver, tool implementations, or observability persistence.
 - Client session hints are untrusted and stored verbatim, with no guarantee of cross-client or cross-version stability. They are strictly observational and may be sensitive. `Tool Logs Contain Sensitive Payloads` and `Client-Declared Logical Sessions Are Linkable and Unverified` in the [current architecture risks](../11-risks-and-technical-debt/current-architecture-risks.md) govern residual exposure; never use hints as an authorization boundary.
 
+## Client-Session Usage Relationships
+
+The installation treats `clientInfo.name` as the unique client identity. Logical-session identity is the composite `(client_id, client_session_id)`, where `client_id` is that name and `client_session_id` retains its adapter namespace. The same session string declared by different clients names different sessions.
+
+`session_shells` records many-to-many usage with the primary key `(client_id, client_session_id, shell_id)` and a reverse index beginning with `shell_id`. Relationships persist independently of complete-call retention and the five-minute active window. A valid Shell invocation establishes membership before executing; successful `create_shell` establishes it when the created ID becomes available. Failed operations on valid Shells count as activity. Calls with no resolved Shell, including unknown-ID failures, do not establish membership or affect session presence.
+
+Session activity is derived from the activity of its member Shells. The Shell-to-session point query takes the union of member Shells belonging to the requested Shell's directly associated sessions. An indexed join deduplicates shared members, and live running calls overlay durable completion times. This is a one-way aggregation: session activity never changes a Shell's own activity, and sessions are not recursively merged through shared Shells. The response exposes one aggregate boolean and deadline without an unbounded membership listing.
+
 ## Activity Policy
 
 `src/observability/activity-policy.ts` is the single authority for active presence.
@@ -68,16 +76,20 @@ The API exposes `active`, `active_until`, `server_time`, and `active_window_ms`.
 
 1. assign call ID and start time, and snapshot the request's client identity;
 2. derive a bounded, tool-agnostic input preview;
-3. publish the running call to `ActivityTracker`;
+3. register valid Shell work and its usage relationship with `ActivityService`, then publish the running call to `ActivityTracker`;
 4. execute the original tool operation;
 5. construct the final success/error record with complete input;
-6. ask `ObservabilityStore` to persist the completed record, preview, and latest Shell lifecycle event;
-7. publish the completed state to `ActivityTracker`; and
+6. synchronously update authoritative Shell completion state and the live projection, independently of full payload persistence;
+7. ask `ObservabilityStore` to persist the completed record and preview, then publish the finished event with settled payload availability; and
 8. preserve the original tool result or original tool error.
 
 Input-preview construction is mechanical rather than semantic: it bounds string length, collection width, and nesting depth without knowing tool names or argument names.
 
 Observability is best-effort relative to host-tool semantics. Persistence or activity-publication failure must not convert a successful host operation into a failed tool call and must not replace the original tool error.
+
+`ActivityService` owns the authoritative running-call IDs, a Shell-to-running-call index, and Shell/session point queries. Completion synchronously commits usage plus the monotonic latest completion time before removing running state; no query can observe a gap between those transitions. The live projection also advances before asynchronous payload writes, while the finished SSE event waits for payload availability to settle. A state read/write failure is diagnosed once and latches `activity_unavailable` for this process: a later successful write cannot prove that previously lost relationships were recovered. Activity JSON reads and new streams return `503`; existing streams close when serialization detects the failure. History and original tool outcomes remain independent.
+
+The projection tracks calls awaiting full history separately from host execution. Call-detail reads retain `409 tool_call_running` until history persistence settles, including when an early completed summary has already appeared in a snapshot; pending payloads are not mistaken for permanently unavailable detail.
 
 ## Shell-Aware Invocation
 
@@ -93,7 +105,7 @@ Unknown `shell_id` failures remain observable calls: the requested ID is known w
 
 `ObservabilityStore` owns one SQLite metadata database plus sharded payload files under `TOOL_LOG_DIR`.
 
-It has two persistence lifecycles.
+It has three persistence lifecycles sharing the same database.
 
 ### Complete Call History
 
@@ -117,13 +129,17 @@ Metadata and payload retire together under `TOOL_LOG_MAX_CALLS`.
 - `cwd`; and
 - latest completed lifecycle-event time.
 
-This row is updated in the same SQLite metadata transaction as a completed call but is **not** retired with complete-call retention. Its purpose is semantic continuity of Shell activity across history eviction and process restart, not history caching. Clearing `history.db` or `TOOL_LOG_DIR` removes both historical calls and durable Shell activity; retention-based call eviction does not.
+This row is updated through the independent synchronous activity-write path, in the same transaction as the completed call's usage relationship, before full payload persistence. It is **not** retired with complete-call retention. Its purpose is semantic continuity of Shell activity across history eviction and process restart, not history caching. Clearing `history.db` or `TOOL_LOG_DIR` removes historical calls, durable Shell activity, and usage relationships; retention-based call eviction does not.
 
 Running-call counts are deliberately not persisted. A process restart terminates process-local running work, so restored running count is zero.
 
 Schema v1 history upgrades to this projection by backfilling the latest retained completed event per Shell. Legacy gzip import also backfills imported Shell activity once. Normal startup does not rescan complete retained history for Shell activity.
 
 Schema v3 adds nullable `client_name` and `client_session_id` columns to retained call metadata. Existing v1/v2 history is migrated in place; older gzip payloads are not rewritten, and API detail reads normalize absent identity fields to `null`.
+
+### Persistent Session Membership
+
+Schema v4 adds `session_shells` and atomically backfills client-scoped membership from retained calls with a resolved Shell and both identity fields. This occurs before startup retention removes calls; legacy imports also preserve identity and backfill membership. Normal startup does not scan history for membership. Evicted or unidentified older relationships cannot be recovered. Database/activity initialization is separate from payload setup and legacy import, so history initialization failure can leave a usable activity database.
 
 ## ActivityTracker
 
@@ -154,13 +170,14 @@ Durable retention depth therefore does not determine active-presence correctness
 Its inputs have distinct ownership:
 
 - `ShellStore` -> Shell existence, `cwd`, creation time, workspace Shell enumeration;
-- `ActivityTracker` -> current running state, active-window in-process presence, bounded live/recent call state;
-- `ObservabilityStore` -> durable latest completed Shell event, retained completed history, full retained call payload;
+- `ActivityService` -> authoritative running Shell work and Shell/session point activity;
+- `ActivityTracker` -> bounded live/recent call projection, workspace presence, and subscribers;
+- `ObservabilityStore` -> durable latest completed Shell event, persistent usage relationships, retained completed history, full retained call payload;
 - `activity-policy.ts` -> active/deadline semantics.
 
 HTTP handlers do not recreate cross-store rules.
 
-For a direct Shell activity read, runtime tracker state wins while present because it includes current running counts. Once runtime presence expires or after restart, the query falls back to durable latest Shell activity and derives the current result from server time.
+Shell and session point reads use `ActivityService`, combining durable completion times with its process-local running-call index. Each query captures one server time and applies the shared activity policy; a restart restores no running calls. Projection history bounds do not limit point-query correctness.
 
 ## Versioned HTTP Surface
 
@@ -170,6 +187,7 @@ The first-class read-only API lives under `/api/v1/*`:
     GET /api/v1/activity/stream
     GET /api/v1/shells?cwd=...
     GET /api/v1/shells/:shell_id/activity
+    GET /api/v1/shells/:shell_id/session-activity
     GET /api/v1/shells/:shell_id/calls
     GET /api/v1/tool-calls/:call_id
 
@@ -178,6 +196,8 @@ The first-class read-only API lives under `/api/v1/*`:
 Live events include the call plus server-derived workspace/Shell presence at publication time. Full tool input/output is never placed in the live feed by default.
 
 `GET /api/v1/shells/:shell_id/activity` is the authoritative point query for Shell presence. Unknown durable Shell IDs return `404 shell_not_found`.
+
+`GET /api/v1/shells/:shell_id/session-activity` returns `shell_id`, aggregate `active`, `active_until`, and `server_time`. Running work on any member yields no fixed deadline; otherwise the maximum member deadline applies, with the exact deadline inactive. A known Shell with no recorded membership returns false and a null deadline. Invalid IDs return `400 invalid_request`; unknown Shells return `404 shell_not_found`. Both point queries report unavailable activity state with `503 activity_unavailable` rather than an incomplete inactive answer.
 
 Pagination cursors are opaque transport values. Consumers may persist and return a cursor but must not decode it as a Shell ID, call ID, sequence, timestamp, or storage key.
 
@@ -271,6 +291,7 @@ Any future API or browser mutation requires explicit security reassessment rathe
         observability.ts
       observability/
         activity-policy.ts
+        activity-service.ts
         activity-tracker.ts
         observability-query.ts
         observability-store.ts

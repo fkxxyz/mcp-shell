@@ -1,6 +1,8 @@
 import { once } from "node:events";
 import { Router, type Response } from "express";
+import type { ActivitySnapshotDto } from "../../contracts/observability.js";
 import type { ActivityTracker } from "../../observability/activity-tracker.js";
+import { ActivityUnavailableError } from "../../observability/activity-service.js";
 import {
   ObservabilityQuery,
   ObservabilityQueryError,
@@ -19,6 +21,13 @@ export function createObservabilityApiRouter(query: ObservabilityQuery, activity
 
   router.get("/activity/stream", (req, res) => {
     const opened = activity.openFeed();
+    let snapshot: ActivitySnapshotDto;
+    try {
+      snapshot = query.serializeSnapshot(opened.snapshot);
+    } catch (error) {
+      opened.feed.close();
+      return handleQueryError(res, error);
+    }
     let closed = false;
     let heartbeat: NodeJS.Timeout | undefined;
 
@@ -40,7 +49,7 @@ export function createObservabilityApiRouter(query: ObservabilityQuery, activity
 
     void (async () => {
       try {
-        await writeEvent(res, "snapshot", query.serializeSnapshot(opened.snapshot));
+        await writeEvent(res, "snapshot", snapshot);
 
         while (!closed) {
           const event = await opened.feed.next();
@@ -87,6 +96,18 @@ export function createObservabilityApiRouter(query: ObservabilityQuery, activity
     }
   });
 
+  router.get("/shells/:shellId/session-activity", (req, res) => {
+    try {
+      const shellId = parsePositiveInteger(req.params.shellId);
+      if (shellId === undefined) {
+        return sendError(res, 400, "invalid_request", "shellId must be a positive integer");
+      }
+      return res.json(query.getShellSessionActivity(shellId));
+    } catch (error) {
+      return handleQueryError(res, error);
+    }
+  });
+
   router.get("/shells/:shellId/calls", (req, res) => {
     try {
       const shellId = parsePositiveInteger(req.params.shellId);
@@ -127,6 +148,9 @@ function parsePositiveInteger(value: unknown): number | undefined {
 }
 
 function handleQueryError(res: Response, error: unknown) {
+  if (error instanceof ActivityUnavailableError) {
+    return sendError(res, 503, "activity_unavailable", error.message);
+  }
   if (error instanceof ObservabilityQueryError) {
     return sendError(res, error.status, error.code, error.message);
   }

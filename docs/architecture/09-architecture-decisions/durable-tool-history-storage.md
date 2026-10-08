@@ -51,7 +51,7 @@ Completed tool history has one durable authority: `ObservabilityStore`.
 
 `ActivityTracker` remains an independent bounded in-memory projection for running and recent activity. It does not provide durable Shell-history pagination.
 
-The same SQLite database also stores one compact `shell_activity` row per observed Shell containing its latest completed lifecycle event. This state has a different lifetime from complete-call history: it is not retired by `TOOL_LOG_MAX_CALLS`. It exists so current Shell activity semantics survive complete-call eviction and process restart without making tool history the authority for Shell existence. **Deleting `history.db` or `TOOL_LOG_DIR` erases this continuity, not only retained call history.** Do not treat the entire directory as a disposable history cache.
+The same SQLite database also stores one compact `shell_activity` row per observed Shell containing its latest completed lifecycle event, plus `session_shells` usage relationships keyed by `(client_id, client_session_id, shell_id)`. Both have independent lifetimes and activity-write paths: neither is retired by `TOOL_LOG_MAX_CALLS` or requires a successful full payload write. They preserve Shell/session activity through call eviction and restart without making history authoritative for Shell existence. **Deleting `history.db` or `TOOL_LOG_DIR` erases this continuity and membership, not only retained call history.** Do not treat the entire directory as a disposable history cache.
 
 `TOOL_LOG_MAX_CALLS=N` means at most N complete completed-call history records are retained. Metadata and payload share the same retention lifetime.
 
@@ -75,15 +75,19 @@ This ordering prefers user-visible consistency over perfect garbage collection. 
 
 Measured evidence motivated the choice. With one million retained metadata rows, the default DELETE/FULL transaction path added about 21 ms median and 25 ms p95 to a real store persistence workload. Isolating the same metadata transaction showed DELETE/FULL at about 17.9 ms median, WAL/FULL at about 6.0 ms, and WAL/NORMAL at about 0.04 ms. A post-change real-store run at 100,000 retained rows measured about 0.46 ms median and 0.86 ms p95; the host lacked enough free disk for a second safe one-million-row run.
 
-Logging remains best-effort relative to host-tool semantics. Persistence failure is diagnosed but cannot replace a successful host action or the original tool error. If initialization fails, that process keeps the history store in a degraded state and subsequent writes fail fast rather than repeatedly rerunning initialization or legacy migration; a process restart is the retry boundary.
+Logging remains best-effort relative to host-tool semantics. Persistence failure is diagnosed but cannot replace a successful host action or the original tool error. Database/activity initialization and payload/history initialization have separate memoized outcomes. A payload setup/import failure keeps history writes degraded and failing fast, while already initialized activity tables remain usable; a process restart is the retry boundary. Activity read/write failure is separately latched by `ActivityService`, causing explicit `503 activity_unavailable` responses instead of incomplete inactive results.
+
+Activity writes occur before the payload sequence above. At invocation start, valid Shell usage inserts membership. At completion, membership and the monotonic latest Shell time commit together in a synchronous SQLite transaction; running state is then removed and the projection advances before asynchronous gzip/file operations. `ObservabilityStore.persist()` owns complete history only. No per-session active flag or redundant session activity timestamp is persisted.
 
 ## Query Ownership
 
 Durable and live queries have separate authorities:
 
 - Activity snapshot and SSE lifecycle events -> `ActivityTracker`;
+- authoritative running Shell work and Shell/session point presence -> `ActivityService`;
 - completed Shell history and pagination -> `ObservabilityStore`;
 - latest completed Shell lifecycle event -> `ObservabilityStore.shell_activity`;
+- durable client-session usage relationships -> `ObservabilityStore.session_shells`;
 - completed call detail -> `ObservabilityStore`;
 - running-call detail state -> `ActivityTracker` before durable lookup;
 - Shell inventory -> `ShellStore`.
@@ -92,7 +96,7 @@ Browser pagination cursors remain opaque. Their current durable position encodes
 
 ## Startup and Shutdown
 
-Startup opens and validates the observability schema, imports legacy retained gzip payloads when present, converges history retention to the configured count, and reads only bounded recent call summaries plus Shell activity still inside the active window to bootstrap `ActivityTracker`.
+Startup opens and validates the observability schema, imports legacy retained gzip payloads when present, converges history retention to the configured count, and reads only bounded recent call summaries plus Shell activity still inside the active window to bootstrap `ActivityTracker`. Activity bootstrap remains possible when payload/history initialization fails. Schema v4 atomically backfills client-scoped usage from identified, resolved Shell calls before retention. Previously evicted or unidentified associations cannot be reconstructed, and normal startup does not rescan history for membership.
 
 Legacy import is one-way and idempotent. Retained legacy payloads are moved into the new sharded layout and indexed; old metadata-only entries whose payloads were already retired are not preserved. Malformed legacy payloads are moved once to `legacy-rejected/` with a diagnostic so they remain inspectable without blocking migration convergence on every restart. Migration reports bounded progress and has no permanent dual-read compatibility path.
 

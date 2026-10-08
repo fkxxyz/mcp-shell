@@ -5,6 +5,7 @@ import type {
   ActivitySnapshotDto,
   ActivityWorkspacePresenceDto,
   ShellActivityDto,
+  ShellSessionActivityDto,
   ShellCallsDto,
   ToolCallDetailDto,
   ToolCallSummaryDto,
@@ -23,6 +24,7 @@ import type {
 } from "./activity-tracker.js";
 import type { ToolCallSummary } from "./tool-call.js";
 import type { ToolHistoryCursor, ObservabilityStore } from "./observability-store.js";
+import type { ActivityService } from "./activity-service.js";
 
 export class ObservabilityQueryError extends Error {
   constructor(
@@ -39,6 +41,7 @@ export class ObservabilityQuery {
     private readonly shells: ShellStore,
     private readonly logs: ObservabilityStore,
     private readonly activity: ActivityTracker,
+    private readonly presence: ActivityService,
   ) {}
 
   snapshot(): ActivitySnapshotDto {
@@ -46,6 +49,7 @@ export class ObservabilityQuery {
   }
 
   serializeSnapshot(snapshot: ActivitySnapshot): ActivitySnapshotDto {
+    this.presence.assertAvailable();
     const now = snapshot.serverTime;
     return {
       server_time: new Date(now).toISOString(),
@@ -59,6 +63,7 @@ export class ObservabilityQuery {
   }
 
   serializeCallEvent(event: ActivityEvent): ActivityCallEventDto {
+    this.presence.assertAvailable();
     const now = event.serverTime;
     return {
       call: toApiSummary(event.call),
@@ -94,6 +99,20 @@ export class ObservabilityQuery {
       active_until: toIsoOrNull(presence.activeUntil),
       server_time: new Date(now).toISOString(),
       active_window_ms: ACTIVITY_ACTIVE_WINDOW_MS,
+    };
+  }
+
+  getShellSessionActivity(shellId: number): ShellSessionActivityDto {
+    if (!this.shells.get(shellId)) {
+      throw new ObservabilityQueryError(404, "shell_not_found", `Unknown shell_id: ${shellId}`);
+    }
+    const now = Date.now();
+    const presence = this.presence.getSessionActivityForShell(shellId, now);
+    return {
+      shell_id: shellId,
+      active: presence.active,
+      active_until: toIsoOrNull(presence.activeUntil),
+      server_time: new Date(now).toISOString(),
     };
   }
 
@@ -133,7 +152,7 @@ export class ObservabilityQuery {
 
   async getToolCall(callId: string): Promise<ToolCallDetailDto> {
     const summary = this.activity.getCall(callId);
-    if (summary?.status === "running") {
+    if (summary?.status === "running" || this.activity.isHistoryPending(callId)) {
       throw new ObservabilityQueryError(409, "tool_call_running", "Tool call has not finished");
     }
     if (summary && summary.payloadAvailable === false) {
@@ -159,18 +178,7 @@ export class ObservabilityQuery {
   }
 
   private resolveShellActivity(shellId: number): ShellActivitySnapshot | undefined {
-    const runtime = this.activity.getShellActivity(shellId);
-    if (runtime) return runtime;
-
-    const persisted = this.logs.getShellActivity(shellId);
-    if (!persisted) return undefined;
-
-    return {
-      shellId,
-      cwd: persisted.cwd,
-      lastEventAt: persisted.lastEventAt,
-      runningCallCount: 0,
-    };
+    return this.presence.getShellActivity(shellId);
   }
 }
 

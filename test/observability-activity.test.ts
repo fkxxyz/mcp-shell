@@ -16,7 +16,9 @@ test("latest Shell activity survives call retention and store restart", async (t
   let store = new ObservabilityStore(dir, 1);
   await store.initialize();
 
+  store.recordShellActivity({ shellId: 1, cwd: "/one", lastEventAt: firstFinishedAt });
   await store.persist(record("first", 1, 1, "/one", firstFinishedAt - 1_000, firstFinishedAt));
+  store.recordShellActivity({ shellId: 2, cwd: "/two", lastEventAt: firstFinishedAt + 2_000 });
   await store.persist(record("second", 2, 2, "/two", firstFinishedAt + 1_000, firstFinishedAt + 2_000));
 
   assert.equal(store.listShellCalls(1, 10).items.length, 0, "retention should evict shell 1 call history");
@@ -124,7 +126,7 @@ test("frozen schema v2 fixture upgrades in place without rewriting retained payl
     assert.deepEqual(await readFile(join(dir, relativePayload)), before);
 
     const db = new DatabaseSync(join(dir, "history.db"));
-    assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
+    assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 4);
     const row = db.prepare("SELECT client_name, client_session_id FROM tool_calls WHERE id = ?").get("legacy-v2") as {
       client_name: string | null; client_session_id: string | null;
     };

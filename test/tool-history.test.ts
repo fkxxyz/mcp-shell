@@ -6,6 +6,7 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 import { ObservabilityQuery } from "../src/observability/observability-query.js";
 import { ActivityTracker } from "../src/observability/activity-tracker.js";
+import { ActivityService } from "../src/observability/activity-service.js";
 import {
   ToolCallRecorder,
   withToolLogContext,
@@ -142,7 +143,7 @@ test("history survives restart with input previews and durable cursor pagination
   let tracker = new ActivityTracker(10);
   let store = new ObservabilityStore(dir, 10);
   await store.initialize();
-  let recorder = new ToolCallRecorder(store, tracker);
+  let recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
 
   try {
     for (let i = 0; i < 5; i++) {
@@ -158,7 +159,7 @@ test("history survives restart with input previews and durable cursor pagination
     store = new ObservabilityStore(dir, 10);
     await store.initialize();
     tracker = new ActivityTracker(10);
-    recorder = new ToolCallRecorder(store, tracker);
+    recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
 
     const recent = store.readRecent(1);
     assert.deepEqual(recent[0]!.inputPreview, { path: "file-4.ts" });
@@ -193,6 +194,8 @@ test("legacy gzip payloads migrate once into sharded durable history", async () 
     legacyRecord("00000000-0000-4000-8000-000000000001", 1, "2026-10-06T23:59:00.000Z", "old.ts"),
     legacyRecord("00000000-0000-4000-8000-000000000002", 2, "2026-10-07T00:01:00.000Z", "new.ts"),
   ];
+  records[1]!.client_name = "legacy-client";
+  records[1]!.client_session_id = "openai:legacy-session";
   for (const record of records) {
     await writeFile(
       join(callsDir, `${record.started_at.replace(/[-:]/g, "")}-${String(record.sequence).padStart(10, "0")}-${record.id}.json.gz`),
@@ -212,6 +215,8 @@ test("legacy gzip payloads migrate once into sharded durable history", async () 
     await store.initialize();
     assert.equal(store.readRecent(10).length, 2);
     assert.deepEqual(store.readRecent(10)[0]!.inputPreview, { path: "new.ts" });
+    assert.equal(store.readRecent(10)[0]!.clientName, "legacy-client");
+    assert.deepEqual(store.listSessionShellActivity(11).map((row) => row.shellId), [11]);
     assert.equal(store.getShellActivity(11)?.lastEventAt, Date.parse(records[1]!.finished_at));
     assert.equal(await countPayloadFiles(dir), 2);
     await assert.rejects(() => readFile(join(dir, "index.jsonl")));
@@ -241,7 +246,7 @@ test("lower retention converges existing durable history on startup", async () =
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-prune-"));
   let store = new ObservabilityStore(dir, 5);
   let tracker = new ActivityTracker(5);
-  let recorder = new ToolCallRecorder(store, tracker);
+  let recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
   try {
     await store.initialize();
     for (let i = 0; i < 5; i++) {
@@ -252,7 +257,7 @@ test("lower retention converges existing durable history on startup", async () =
 
     store = new ObservabilityStore(dir, 2);
     tracker = new ActivityTracker(2);
-    recorder = new ToolCallRecorder(store, tracker);
+    recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
     await store.initialize();
 
     assert.equal(store.readRecent(10).length, 2);
@@ -271,7 +276,7 @@ test("durable Shell history remains queryable beyond the live activity window", 
   const otherShell = shells.create("/other-workspace");
   const store = new ObservabilityStore(join(dir, "tool-logs"), 10);
   const tracker = new ActivityTracker(1);
-  const recorder = new ToolCallRecorder(store, tracker);
+  const recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
   await store.initialize();
 
   try {
@@ -284,7 +289,7 @@ test("durable Shell history remains queryable beyond the live activity window", 
 
     assert.equal(tracker.snapshot().workspaces[0]?.recentCalls.length, 1);
 
-    const query = new ObservabilityQuery(shells, store, tracker);
+    const query = new ObservabilityQuery(shells, store, tracker, new ActivityService(store));
     const firstPage = query.listShellCalls(shell.id, 1);
     assert.ok(firstPage.next_cursor);
     assert.throws(
@@ -348,7 +353,7 @@ test("history persistence failure never replaces tool success or the original to
   await mkdir(join(dir, "history.db"), { recursive: true });
   const store = new ObservabilityStore(dir, 10);
   const tracker = new ActivityTracker(10);
-  const recorder = new ToolCallRecorder(store, tracker);
+  const recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
   const previousConsoleError = console.error;
   let persistenceErrors = 0;
   console.error = (...args: unknown[]) => {
@@ -387,7 +392,7 @@ async function withToolHistory(
   const dir = await mkdtemp(join(tmpdir(), "mcp-tool-history-test-"));
   const store = new ObservabilityStore(dir, maxCalls);
   const tracker = new ActivityTracker(maxCalls);
-  const recorder = new ToolCallRecorder(store, tracker);
+  const recorder = new ToolCallRecorder(store, tracker, new ActivityService(store));
   await store.initialize();
 
   try {

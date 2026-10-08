@@ -75,13 +75,13 @@ The skill tree is global and mutable. Therefore a skill advertised during Shell 
 2. Tool-log context carries the MCP transport session, bearer-derived actor fingerprint, standard client name, and optional namespaced logical client-session hint. The shared resolver applies the [Activity Observability identity rules](../08-cross-cutting-concepts/activity-observability.md#identity-rules); individual tools do not interpret client-specific headers or metadata.
 3. The MCP SDK dispatches the selected registered tool.
 4. A Shell-aware tool enters the shared invocation helper, which resolves its `shell_id` through `ShellStore`; unknown IDs fail without falling back to a process working directory.
-5. `ToolCallRecorder` snapshots client identity once and publishes the running call to the bounded activity projection before executing the tool.
+5. `ToolCallRecorder` snapshots client identity once, registers valid Shell work with `ActivityService`, persists client-scoped usage membership, and publishes the running call to the bounded activity projection before executing the tool.
 6. Relative operations use the resolved Shell `cwd`.
-7. After execution, `ObservabilityStore` attempts to persist the completed success/error record plus bounded preview and enforce complete-call retention.
-8. `ToolCallRecorder` publishes the completed activity state, including whether full payload detail was retained.
+7. After execution, `ActivityService` synchronously persists the latest Shell completion time and membership, then removes running state. `create_shell` supplies its new Shell ID at this stage. The live projection advances before full history persistence.
+8. `ObservabilityStore` attempts to persist the completed success/error record plus bounded preview and enforce complete-call retention; `ToolCallRecorder` then publishes the finished event, including whether full payload detail was retained.
 9. The original tool result or original tool error is returned through the MCP transport.
 
-Logging persistence or activity-publication failure is reported but does not convert a successful host action into a failed MCP tool result and does not replace the original tool error. Durable history metadata and payload retirement share one retention policy, while ActivityTracker remains independently bounded for live/recent state.
+Logging persistence or activity-publication failure is reported but does not convert a successful host action into a failed MCP tool result and does not replace the original tool error. Activity read/write failure latches a process-local degraded state and activity queries return `503 activity_unavailable`. Durable history metadata and payload retirement share one retention policy; completed Shell state and usage membership have independent lifetimes and write paths, while ActivityTracker remains bounded for live/recent state.
 
 ## Session End and Process Shutdown
 

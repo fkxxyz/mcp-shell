@@ -13,6 +13,7 @@ import { createMcpRouter } from "../mcp/routes.js";
 import { ACTIVITY_ACTIVE_WINDOW_MS } from "../observability/activity-policy.js";
 import { ObservabilityQuery } from "../observability/observability-query.js";
 import { ActivityTracker } from "../observability/activity-tracker.js";
+import { ActivityService } from "../observability/activity-service.js";
 import { ToolCallRecorder } from "../observability/tool-call-recorder.js";
 import { ObservabilityStore } from "../observability/observability-store.js";
 import { ShellStore } from "../shell-store.js";
@@ -60,6 +61,11 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   try {
     await logs.initialize();
     activity.bootstrap(logs.readRecent(activityHistoryCalls));
+  } catch (error) {
+    console.error("Failed to initialize tool activity history:", error);
+  }
+  try {
+    await logs.initializeActivity();
     activity.bootstrapShellActivity(
       logs.listShellActivitySince(Date.now() - ACTIVITY_ACTIVE_WINDOW_MS).map((shell) => ({
         ...shell,
@@ -67,11 +73,12 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
       })),
     );
   } catch (error) {
-    console.error("Failed to initialize tool activity history:", error);
+    console.error("Failed to initialize Shell activity state:", error);
   }
 
-  const recorder = new ToolCallRecorder(logs, activity);
-  const query = new ObservabilityQuery(shells, logs, activity);
+  const presence = new ActivityService(logs);
+  const recorder = new ToolCallRecorder(logs, activity, presence);
+  const query = new ObservabilityQuery(shells, logs, activity, presence);
   const mutations = new FileMutationCoordinator();
   const processes = new ProcessSupervisor();
   const lspManager = dependencies.lspManager ?? new LSPServerManager();

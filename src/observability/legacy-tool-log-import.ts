@@ -123,9 +123,9 @@ async function flushLegacyMigrationBatch(
   const insert = db.prepare(`
     INSERT OR IGNORE INTO tool_calls (
       id, sequence, started_at_ms, finished_at_ms, duration_ms,
-      shell_id, cwd, session, actor, tool, status, input_preview_json,
+      shell_id, cwd, session, actor, client_name, client_session_id, tool, status, input_preview_json,
       stored_bytes, payload_path
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.exec("BEGIN IMMEDIATE");
@@ -194,6 +194,8 @@ function metadataParams(item: LegacyMigrationItem): Array<string | number | null
     record.cwd ?? null,
     record.session ?? null,
     record.actor ?? null,
+    record.client_name ?? null,
+    record.client_session_id ?? null,
     record.tool,
     record.status,
     item.inputPreview ? JSON.stringify(item.inputPreview) : null,
@@ -212,6 +214,8 @@ function isToolCallRecord(value: ToolCallRecord): boolean {
     (value.cwd === undefined || typeof value.cwd === "string") &&
     (value.session === undefined || typeof value.session === "string") &&
     (value.actor === undefined || typeof value.actor === "string") &&
+    (value.client_name == null || typeof value.client_name === "string") &&
+    (value.client_session_id == null || typeof value.client_session_id === "string") &&
     typeof value.started_at === "string" && Number.isFinite(Date.parse(value.started_at)) &&
     typeof value.finished_at === "string" && Number.isFinite(Date.parse(value.finished_at)) &&
     typeof value.duration_ms === "number" && Number.isFinite(value.duration_ms) && value.duration_ms >= 0 &&

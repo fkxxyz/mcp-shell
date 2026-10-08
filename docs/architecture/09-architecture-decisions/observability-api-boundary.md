@@ -51,10 +51,13 @@ The initial v1 resources are:
     GET /api/v1/activity/stream
     GET /api/v1/shells?cwd=...
     GET /api/v1/shells/:shell_id/activity
+    GET /api/v1/shells/:shell_id/session-activity
     GET /api/v1/shells/:shell_id/calls
     GET /api/v1/tool-calls/:call_id
 
 `GET /api/v1/activity` supplies a pollable current snapshot. `GET /api/v1/activity/stream` supplies the same current model followed by lifecycle events over SSE. Shell activity is directly queryable and includes server-derived `active`, `active_until`, running-call count, last-event time, server time, and the active-window duration.
+
+`GET /api/v1/shells/:shell_id/session-activity` accepts only a Shell ID and returns `shell_id`, `active`, `active_until`, and `server_time`. It aggregates directly associated client sessions' member Shells, using `(clientInfo.name, client_session_id)` as session identity. Shared Shells support many-to-many usage without recursively merging sessions. The existing Shell activity endpoint retains its own-Shell meaning. No member lists or client-supplied timing rules are required for a boolean activity check.
 
 The API remains observation-only. It does not execute tools, mutate configuration, close Shells, delete logs, or inherit MCP authority.
 
@@ -69,6 +72,8 @@ The backend owns the active policy:
 `activity-policy.ts` is the semantic authority. API responses expose `active_until` and `server_time` so clients can refresh presentation locally without knowing or duplicating the five-minute rule. **`active` and `active_until` are authoritative results; `active_window_ms` is informational policy metadata, not an instruction for clients to recompute activity.**
 
 Running state is process-local. The latest completed Shell lifecycle event is persisted independently of count-retained complete call history, so `TOOL_LOG_MAX_CALLS`, recent-call UI bounds, restart, and history eviction do not redefine whether a Shell is active.
+
+Client-session usage relationships have the same independent retention guarantee. `ActivityService` derives point activity from authoritative running-call IDs plus durable Shell times; activity state writes precede and are independent of full payload persistence. Payload setup/write failures preserve activity availability when the database remains usable. Activity state failures return `503 activity_unavailable`, with new SSE connections receiving the JSON error before stream headers and existing streams closing when unavailable state is detected. A running member yields a null aggregate deadline; otherwise the maximum member deadline applies. A known Shell with no recorded relationship yields false with a null deadline.
 
 ## Authentication and Exposure
 

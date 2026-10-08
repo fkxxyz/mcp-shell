@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { ActivityTracker } from "./activity-tracker.js";
+import type { ActivityService } from "./activity-service.js";
 import { createInputPreview } from "./input-preview.js";
 import type {
   FinishedToolCallSummary,
@@ -39,6 +40,7 @@ export class ToolCallRecorder {
   constructor(
     private readonly logs: ObservabilityStore,
     private readonly activity: ActivityTracker,
+    private readonly presence: ActivityService,
   ) {}
 
   async run<T>(
@@ -90,8 +92,7 @@ export class ToolCallRecorder {
         output,
       };
 
-      const persisted = await this.persistSafely(record, inputPreview);
-      this.publishFinished({
+      const completed: FinishedToolCallSummary = {
         id,
         tool: meta.tool,
         ...clientIdentity,
@@ -102,8 +103,11 @@ export class ToolCallRecorder {
         finishedAt,
         durationMs: finishedAt - startedAt,
         status: "success",
-        payloadAvailable: persisted?.retained ?? false,
-      });
+        payloadAvailable: false,
+      };
+      this.completeActivity(completed);
+      const persisted = await this.persistSafely(record, inputPreview);
+      this.publishFinished({ ...completed, payloadAvailable: persisted?.retained ?? false });
       if (persisted?.evictedCallIds.length) {
         this.markCallsEvictedSafely(persisted.evictedCallIds);
       }
@@ -130,8 +134,7 @@ export class ToolCallRecorder {
         error: serializeToolError(error),
       };
 
-      const persisted = await this.persistSafely(record, inputPreview);
-      this.publishFinished({
+      const completed: FinishedToolCallSummary = {
         id,
         tool: meta.tool,
         ...clientIdentity,
@@ -142,8 +145,11 @@ export class ToolCallRecorder {
         finishedAt,
         durationMs: finishedAt - startedAt,
         status: "error",
-        payloadAvailable: persisted?.retained ?? false,
-      });
+        payloadAvailable: false,
+      };
+      this.completeActivity(completed);
+      const persisted = await this.persistSafely(record, inputPreview);
+      this.publishFinished({ ...completed, payloadAvailable: persisted?.retained ?? false });
       if (persisted?.evictedCallIds.length) {
         this.markCallsEvictedSafely(persisted.evictedCallIds);
       }
@@ -201,10 +207,20 @@ export class ToolCallRecorder {
     inputPreview?: Record<string, unknown>;
     startedAt: number;
   }): void {
+    this.presence.started(call);
     try {
       this.activity.started(call);
     } catch (error) {
       console.error("Failed to publish tool activity start:", error);
+    }
+  }
+
+  private completeActivity(call: FinishedToolCallSummary): void {
+    this.presence.finished(call);
+    try {
+      this.activity.complete(call);
+    } catch (error) {
+      console.error("Failed to update tool activity completion:", error);
     }
   }
 

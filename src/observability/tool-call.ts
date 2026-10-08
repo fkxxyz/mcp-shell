@@ -1,3 +1,6 @@
+/** Composite logical-session identity; clientInfo.name supplies clientId. */
+export type ClientSessionKey = { clientId: string; clientSessionId: string };
+
 export type ToolLogContext = {
   session?: string;
   actor?: string;

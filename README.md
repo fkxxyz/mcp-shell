@@ -99,7 +99,7 @@ WEB_PASSWORD=
 OBSERVABILITY_TOKEN=
 ```
 
-`TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history. Each retained call keeps compact indexed metadata plus its compressed full payload; when the count is exceeded, the oldest complete calls retire by invocation start order. Latest completed Shell activity is retained independently so activity status survives call-history eviction and restart.
+`TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history. Each retained call keeps compact indexed metadata plus its compressed full payload; when the count is exceeded, the oldest complete calls retire by invocation start order. Latest completed Shell activity and client-session/Shell usage relationships are retained independently so activity status survives call-history eviction and restart. They share `history.db`; deleting that database or `TOOL_LOG_DIR` also deletes this activity state.
 
 Tool-call history, live Activity, and the read-only API include `client_name` (the client-declared MCP `initialize.clientInfo.name`) and `client_session_id` (an optional, best-effort logical session hint). The OpenAI adapter prefers `params._meta["openai/session"]` and falls back to the `x-openai-session` header when metadata is absent or invalid, preserving the `openai:` namespace and existing stored IDs. Other clients still report their standard name, with `client_session_id: null` when no recognized hint exists. Neither field proves user identity or authorizes host access. Session hints are stored verbatim and may be sensitive; protect them using the existing tool-log and Observability API access controls. The existing `session` retains its MCP transport-session meaning. See [Activity Observability — Identity Rules](docs/architecture/08-cross-cutting-concepts/activity-observability.md#identity-rules) for authoritative extraction, ambiguity, and compatibility semantics.
 
@@ -158,6 +158,19 @@ curl -H "Authorization: Bearer $OBSERVABILITY_TOKEN" \
 
 The direct Shell activity response includes `active`, `running_call_count`, `last_event_at`, `active_until`, `server_time`, and `active_window_ms`. Activity is true while a call is running or until five minutes after the latest lifecycle event; that policy is owned by the server. Use `active` and `active_until` as authoritative results; `active_window_ms` is informational and must not be used to reimplement the policy in clients.
 
+To ask whether any session associated with a Shell is active, supply only its Shell ID:
+
+```bash
+curl -H "Authorization: Bearer $OBSERVABILITY_TOKEN" \
+  https://your-host.example.com/api/v1/shells/42/session-activity
+```
+
+The response contains only `shell_id`, `active`, `active_until`, and `server_time`. A session is identified by the pair `(clientInfo.name, client_session_id)`; this installation treats the declared client name as the unique client identity. One session can use multiple Shells, and one Shell can be used by multiple sessions. The result is active when any Shell used by any directly associated session is active. For example, if one session uses Shells 42 and 43, a running call on 43 makes this query for 42 active even when 42 itself is inactive. Shared Shells do not recursively merge sessions or change another Shell's own activity.
+
+Relationships are recorded before valid Shell tool execution, including tools that fail, and after successful `create_shell` completion. Calls without a resolved Shell do not affect session activity. Usage relationships remain after the activity window expires. A running related call gives `active_until: null`; otherwise the deadline is the maximum related Shell deadline. A known Shell with no recorded session relationship returns `active: false` and `active_until: null`. Invalid IDs return `400 invalid_request`; unknown Shells return `404 shell_not_found`.
+
+Activity state is saved independently of full call payloads. Payload setup or write failure does not prevent activity queries. Activity database/read/write failure returns `503 activity_unavailable` for activity queries and remains degraded until process restart; original host-tool results are preserved. Schema v4 automatically backfills relationships from retained historical calls carrying both client identity fields before history retention runs. Previously evicted or unidentified relationships cannot be reconstructed from that history.
+
 Useful endpoints include:
 
 ```text
@@ -165,6 +178,7 @@ GET /api/v1/activity
 GET /api/v1/activity/stream
 GET /api/v1/shells?cwd=...
 GET /api/v1/shells/:shell_id/activity
+GET /api/v1/shells/:shell_id/session-activity
 GET /api/v1/shells/:shell_id/calls
 GET /api/v1/tool-calls/:call_id
 ```
