@@ -151,7 +151,11 @@ export class ObservabilityQuery {
         summary ? "Tool call payload is no longer available" : "Unknown tool call",
       );
     }
-    return result.record;
+    return {
+      ...result.record,
+      client_name: result.record.client_name ?? null,
+      client_session_id: result.record.client_session_id ?? null,
+    };
   }
 
   private resolveShellActivity(shellId: number): ShellActivitySnapshot | undefined {
@@ -173,6 +177,8 @@ export class ObservabilityQuery {
 export function toApiSummary(call: ToolCallSummary): ToolCallSummaryDto {
   return {
     id: call.id,
+    client_name: call.clientName ?? null,
+    client_session_id: call.clientSessionId ?? null,
     shell_id: call.shellId ?? null,
     cwd: call.cwd ?? null,
     tool: call.tool,

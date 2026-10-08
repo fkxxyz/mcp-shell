@@ -83,6 +83,8 @@ describe("ActivityStore", () => {
         active_until: null,
         recent_calls: [{
           id: "running",
+          client_name: null,
+          client_session_id: null,
           shell_id: 1,
           cwd: "/running",
           tool: "bash",
@@ -155,6 +157,8 @@ describe("ActivityStore", () => {
 
     const running: ToolCallSummaryDto = {
       id: "long-running",
+      client_name: null,
+      client_session_id: null,
       shell_id: 1,
       cwd: "/work",
       tool: "bash",
@@ -349,6 +353,8 @@ function activityEvent(call: ToolCallSummaryDto): ActivityCallEventDto {
 function call(id: string, cwd: string, at: number): ToolCallSummaryDto {
   return {
     id,
+    client_name: null,
+    client_session_id: null,
     shell_id: 1,
     cwd,
     tool: "read",
@@ -364,6 +370,8 @@ function call(id: string, cwd: string, at: number): ToolCallSummaryDto {
 function runningCall(id: string, cwd: string, at: number, shellId = 1): ToolCallSummaryDto {
   return {
     id,
+    client_name: null,
+    client_session_id: null,
     shell_id: shellId,
     cwd,
     tool: "bash",

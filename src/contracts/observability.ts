@@ -2,6 +2,8 @@ export type ToolCallStatusDto = "running" | "success" | "error";
 
 export type ToolCallSummaryDto = {
   id: string;
+  client_name: string | null;
+  client_session_id: string | null;
   shell_id: number | null;
   cwd: string | null;
   tool: string;
@@ -88,6 +90,8 @@ export type ToolCallDetailDto = {
   duration_ms: number;
   session?: string;
   actor?: string;
+  client_name: string | null;
+  client_session_id: string | null;
   tool: string;
   input: unknown;
   status: "success" | "error";

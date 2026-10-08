@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { CommandPathPolicy } from "../command-path.js";
@@ -12,7 +13,10 @@ import type { LSPServerManager } from "../tools/lsp.js";
 import { createMcpServer } from "./server.js";
 
 export class McpSessionManager {
-  private readonly transports = new Map<string, StreamableHTTPServerTransport>();
+  private readonly sessions = new Map<string, {
+    transport: StreamableHTTPServerTransport;
+    server: McpServer;
+  }>();
   private closing = false;
   private closePromise: Promise<void> | undefined;
 
@@ -28,7 +32,11 @@ export class McpSessionManager {
   ) {}
 
   get(sessionId: string | undefined): StreamableHTTPServerTransport | undefined {
-    return sessionId ? this.transports.get(sessionId) : undefined;
+    return sessionId ? this.sessions.get(sessionId)?.transport : undefined;
+  }
+
+  getClientName(sessionId: string | undefined): string | undefined {
+    return sessionId ? this.sessions.get(sessionId)?.server.server.getClientVersion()?.name : undefined;
   }
 
   async resolveForPost(
@@ -41,22 +49,6 @@ export class McpSessionManager {
     if (sessionId || !isInitializeRequest(body)) return undefined;
 
     let transport: StreamableHTTPServerTransport;
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: async (id) => {
-        if (this.closing) {
-          await transport.close();
-          return;
-        }
-        this.transports.set(id, transport);
-      },
-    });
-
-    transport.onclose = () => {
-      const id = transport.sessionId;
-      if (id) this.transports.delete(id);
-    };
-
     const server = createMcpServer(
       this.invocations,
       this.shells,
@@ -67,6 +59,21 @@ export class McpSessionManager {
       this.processes,
       this.lspManager,
     );
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: async (id) => {
+        if (this.closing) {
+          await transport.close();
+          return;
+        }
+        this.sessions.set(id, { transport, server });
+      },
+    });
+
+    transport.onclose = () => {
+      const id = transport.sessionId;
+      if (id) this.sessions.delete(id);
+    };
     await server.connect(transport);
     if (this.closing) {
       await transport.close();
@@ -80,7 +87,7 @@ export class McpSessionManager {
   }
 
   closeStandaloneStreams(): void {
-    for (const transport of this.transports.values()) {
+    for (const { transport } of this.sessions.values()) {
       transport.closeStandaloneSSEStream();
     }
   }
@@ -92,9 +99,9 @@ export class McpSessionManager {
   }
 
   private async closeTransports(): Promise<void> {
-    while (this.transports.size > 0) {
-      const transports = [...this.transports.values()];
-      this.transports.clear();
+    while (this.sessions.size > 0) {
+      const transports = [...this.sessions.values()].map((entry) => entry.transport);
+      this.sessions.clear();
       await Promise.allSettled(transports.map((transport) => transport.close()));
     }
   }

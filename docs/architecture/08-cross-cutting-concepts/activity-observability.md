@@ -45,6 +45,9 @@ No durable Workspace entity is introduced.
 - Multiple Shells may share one `cwd` and remain distinct.
 - A Shell root remains stable even if one command changes its child-process working directory.
 - `create_shell` can publish its requested `cwd` before a resulting `shell_id` exists.
+- `client_name` is the MCP client's declared `initialize.clientInfo.name` for the transport. `client_session_id` is a separate optional, namespaced logical-session hint extracted by the MCP request boundary; neither changes Shell identity or represents authorization.
+- The OpenAI-specific adapter uses only the `x-openai-session` header, namespaced as `openai:<opaque header value>`. A 2026-10-08 diagnostic saw matching *groups* across Header and `params._meta["openai/session"]`, but **did not establish raw-value equality**: it hashed raw Header strings versus JSON-stringified metadata strings, producing non-comparable fingerprints. The metadata value is therefore not a fallback; mixing unverified representations could split one logical session into distinct identities. Missing/invalid headers or ambiguous batches leave the logical-session field null. The existing `session` remains the MCP transport session ID. No vendor-specific rules belong in the generic resolver, tool implementations, or observability persistence.
+- Client session hints are untrusted and stored verbatim, with no guarantee of cross-client or cross-version stability. They are strictly observational and may be sensitive. `Tool Logs Contain Sensitive Payloads` and `Client-Declared Logical Sessions Are Linkable and Unverified` in the [current architecture risks](../11-risks-and-technical-debt/current-architecture-risks.md) govern residual exposure; never use hints as an authorization boundary.
 
 ## Activity Policy
 
@@ -63,7 +66,7 @@ The API exposes `active`, `active_until`, `server_time`, and `active_window_ms`.
 
 `ToolCallRecorder` is the single control point for recorded invocation lifecycle:
 
-1. assign call ID and start time;
+1. assign call ID and start time, and snapshot the request's client identity;
 2. derive a bounded, tool-agnostic input preview;
 3. publish the running call to `ActivityTracker`;
 4. execute the original tool operation;
@@ -100,7 +103,8 @@ Count-retained completed calls use:
 - date-sharded gzip payloads under `payloads/YYYY/MM/DD/`;
 - atomic payload publication before metadata visibility;
 - indexed Shell-history pagination and recent-summary reads;
-- bounded input previews in metadata; and
+- bounded input previews in metadata;
+- nullable client identity columns in the indexed history summary and matching fields in the full gzip payload; and
 - full payload lookup by call ID.
 
 Metadata and payload retire together under `TOOL_LOG_MAX_CALLS`.
@@ -118,6 +122,8 @@ This row is updated in the same SQLite metadata transaction as a completed call 
 Running-call counts are deliberately not persisted. A process restart terminates process-local running work, so restored running count is zero.
 
 Schema v1 history upgrades to this projection by backfilling the latest retained completed event per Shell. Legacy gzip import also backfills imported Shell activity once. Normal startup does not rescan complete retained history for Shell activity.
+
+Schema v3 adds nullable `client_name` and `client_session_id` columns to retained call metadata. Existing v1/v2 history is migrated in place; older gzip payloads are not rewritten, and API detail reads normalize absent identity fields to `null`.
 
 ## ActivityTracker
 

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { gzipSync } from "node:zlib";
 import { ObservabilityStore } from "../src/observability/observability-store.js";
 import type { ToolCallRecord } from "../src/observability/tool-call.js";
 
@@ -83,6 +84,61 @@ test("schema v1 history upgrades to durable Shell activity", async (t) => {
       lastEventAt: finishedAt,
     });
     assert.equal(store.listShellCalls(42, 10).items.length, 1);
+  } finally {
+    store.close();
+  }
+});
+
+test("frozen schema v2 fixture upgrades in place without rewriting retained payloads", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-observability-v2-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  // Historical v2 DDL comes from commit a838473, not reverse-engineered from
+  // the latest schema (which could mask a missing migration step).
+  const oldDb = new DatabaseSync(join(dir, "history.db"));
+  oldDb.exec(await readFile(new URL("./fixtures/observability-history-v2.sql", import.meta.url), "utf8"));
+  oldDb.close();
+
+  const relativePayload = "payloads/2026/10/07/legacy-v2.json.gz";
+  await mkdir(join(dir, "payloads/2026/10/07"), { recursive: true });
+  const compressed = gzipSync(JSON.stringify({
+    ...record("legacy-v2", 1, 42, "/project", 1791356400000, 1791356400010),
+    input: { shell_id: 42, path: "old.txt" },
+  }));
+  await writeFile(join(dir, relativePayload), compressed);
+  const before = await readFile(join(dir, relativePayload));
+
+  let store = new ObservabilityStore(dir, 10);
+  try {
+    await store.initialize();
+    assert.equal(store.listShellCalls(42, 10).items[0]?.clientName, undefined);
+    assert.equal(store.listShellCalls(42, 10).items[0]?.clientSessionId, undefined);
+    assert.equal(store.getShellActivity(42)?.lastEventAt, 1791356400010);
+    const original = await store.readCall("legacy-v2");
+    assert.equal(original.kind, "found");
+    if (original.kind === "found") {
+      assert.equal(original.record.tool, "read");
+      assert.equal(original.record.client_name, undefined);
+      assert.deepEqual(original.record.input, { shell_id: 42, path: "old.txt" });
+    }
+    assert.deepEqual(await readFile(join(dir, relativePayload)), before);
+
+    const db = new DatabaseSync(join(dir, "history.db"));
+    assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
+    const row = db.prepare("SELECT client_name, client_session_id FROM tool_calls WHERE id = ?").get("legacy-v2") as {
+      client_name: string | null; client_session_id: string | null;
+    };
+    assert.equal(row.client_name, null);
+    assert.equal(row.client_session_id, null);
+    db.close();
+  } finally {
+    store.close();
+  }
+
+  store = new ObservabilityStore(dir, 10);
+  try {
+    await store.initialize();
+    assert.equal(store.listShellCalls(42, 10).items.length, 1, "reopen must not rerun migrations or duplicate rows");
   } finally {
     store.close();
   }

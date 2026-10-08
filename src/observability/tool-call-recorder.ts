@@ -50,11 +50,16 @@ export class ToolCallRecorder {
     const sequence = ++this.sequence;
     const startedAt = Date.now();
     const context = contextStorage.getStore();
+    const clientIdentity = {
+      clientName: context?.clientName,
+      clientSessionId: context?.clientSessionId,
+    };
     const inputPreview = this.createInputPreviewSafely(meta.input);
 
     this.publishStarted({
       id,
       tool: meta.tool,
+      ...clientIdentity,
       shellId: meta.shellId,
       cwd: meta.cwd,
       inputPreview,
@@ -77,6 +82,8 @@ export class ToolCallRecorder {
         duration_ms: finishedAt - startedAt,
         session: context?.session,
         actor: context?.actor,
+        client_name: clientIdentity.clientName ?? null,
+        client_session_id: clientIdentity.clientSessionId ?? null,
         tool: meta.tool,
         input: meta.input,
         status: "success",
@@ -87,6 +94,7 @@ export class ToolCallRecorder {
       this.publishFinished({
         id,
         tool: meta.tool,
+        ...clientIdentity,
         shellId: record.shell_id,
         cwd: record.cwd,
         inputPreview,
@@ -114,6 +122,8 @@ export class ToolCallRecorder {
         duration_ms: finishedAt - startedAt,
         session: context?.session,
         actor: context?.actor,
+        client_name: clientIdentity.clientName ?? null,
+        client_session_id: clientIdentity.clientSessionId ?? null,
         tool: meta.tool,
         input: meta.input,
         status: "error",
@@ -124,6 +134,7 @@ export class ToolCallRecorder {
       this.publishFinished({
         id,
         tool: meta.tool,
+        ...clientIdentity,
         shellId: meta.shellId,
         cwd: meta.cwd,
         inputPreview,
@@ -183,6 +194,8 @@ export class ToolCallRecorder {
   private publishStarted(call: {
     id: string;
     tool: string;
+    clientName?: string;
+    clientSessionId?: string;
     shellId?: number;
     cwd?: string;
     inputPreview?: Record<string, unknown>;

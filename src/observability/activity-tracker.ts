@@ -181,16 +181,13 @@ export class ActivityTracker {
 
     const existing = this.byId.get(call.id);
     const summary: ToolCallSummary = {
-      id: call.id,
-      tool: call.tool,
+      // Preserve the complete finished-call projection as fields evolve.
+      // The previous per-property rebuild silently dropped client identity.
+      ...existing,
+      ...call,
       shellId: call.shellId ?? existing?.shellId,
       cwd: call.cwd ?? existing?.cwd,
       inputPreview: call.inputPreview ?? existing?.inputPreview,
-      startedAt: call.startedAt,
-      finishedAt: call.finishedAt,
-      durationMs: call.durationMs,
-      status: call.status,
-      payloadAvailable: call.payloadAvailable,
     };
     this.byId.set(call.id, summary);
 

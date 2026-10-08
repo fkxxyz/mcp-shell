@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { withToolLogContext } from "../observability/tool-call-recorder.js";
+import { resolveClientIdentity } from "./client-identity.js";
 import { McpSessionManager } from "./session-manager.js";
 
 export function createMcpRouter(sessions: McpSessionManager): Router {
@@ -19,6 +20,7 @@ export function createMcpRouter(sessions: McpSessionManager): Router {
       await withToolLogContext({
         session: req.header("mcp-session-id"),
         actor: res.locals.toolLogActor,
+        ...resolveClientIdentity(sessions.getClientName(transport.sessionId), req),
       }, () => transport.handleRequest(req, res, req.body));
     } catch (error) {
       console.error(error);

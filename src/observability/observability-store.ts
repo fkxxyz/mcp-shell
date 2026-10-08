@@ -9,7 +9,7 @@ import type { FinishedToolCallSummary, ToolCallRecord } from "./tool-call.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const RETENTION_BATCH_SIZE = 1_000;
 
 export type ToolHistoryCursor = {
@@ -49,6 +49,8 @@ type ToolHistoryRow = {
   duration_ms: number;
   shell_id: number | null;
   cwd: string | null;
+  client_name: string | null;
+  client_session_id: string | null;
   tool: string;
   status: "success" | "error";
   input_preview_json: string | null;
@@ -296,6 +298,8 @@ export class ObservabilityStore {
         cwd TEXT,
         session TEXT,
         actor TEXT,
+        client_name TEXT,
+        client_session_id TEXT,
         tool TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('success', 'error')),
         input_preview_json TEXT,
@@ -338,16 +342,33 @@ export class ObservabilityStore {
       `);
     }
 
-    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    if (currentVersion < 3) {
+      // Keep the schema update and version advancement atomic, including when
+      // upgrading existing v1/v2 databases with retained history.
+      const columns = new Set(
+        (db.prepare("PRAGMA table_info(tool_calls)").all() as Array<{ name: string }>).map((column) => column.name),
+      );
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!columns.has("client_name")) db.exec("ALTER TABLE tool_calls ADD COLUMN client_name TEXT");
+        if (!columns.has("client_session_id")) db.exec("ALTER TABLE tool_calls ADD COLUMN client_session_id TEXT");
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    }
   }
 
   private prepareStatements(db: DatabaseSync): void {
     const sql = `
       INSERT INTO tool_calls (
         id, sequence, started_at_ms, finished_at_ms, duration_ms,
-        shell_id, cwd, session, actor, tool, status, input_preview_json,
+        shell_id, cwd, session, actor, client_name, client_session_id,
+        tool, status, input_preview_json,
         stored_bytes, payload_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     this.insertCall = db.prepare(sql);
     this.upsertShellActivity = db.prepare(`
@@ -487,7 +508,7 @@ export class ObservabilityStore {
 
 const SUMMARY_COLUMNS = `
   history_id, id, sequence, started_at_ms, finished_at_ms, duration_ms,
-  shell_id, cwd, tool, status, input_preview_json, payload_path
+  shell_id, cwd, client_name, client_session_id, tool, status, input_preview_json, payload_path
 `;
 
 function metadataParams(
@@ -506,6 +527,8 @@ function metadataParams(
     record.cwd ?? null,
     record.session ?? null,
     record.actor ?? null,
+    record.client_name ?? null,
+    record.client_session_id ?? null,
     record.tool,
     record.status,
     inputPreview ? JSON.stringify(inputPreview) : null,
@@ -518,6 +541,8 @@ function rowToSummary(row: ToolHistoryRow): FinishedToolCallSummary {
   return {
     id: row.id,
     tool: row.tool,
+    clientName: row.client_name ?? undefined,
+    clientSessionId: row.client_session_id ?? undefined,
     shellId: row.shell_id ?? undefined,
     cwd: row.cwd ?? undefined,
     inputPreview: parseInputPreview(row.input_preview_json),

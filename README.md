@@ -24,6 +24,7 @@ It can serve a same-machine client over loopback without built-in OAuth, or a re
 - Persistent Shell execution contexts
 - Persistent token state
 - Tool-call logging
+- Client name and optional logical-session attribution on tool-call activity/history
 - Versioned read-only Observability API for scripts, monitors, agents, and the bundled UI
 - Optional read-only Web Console with live Activity grouped by workspace
 - Guardrails for broad filesystem searches
@@ -99,6 +100,8 @@ OBSERVABILITY_TOKEN=
 ```
 
 `TOOL_LOG_MAX_CALLS` bounds complete retained tool-call history. Each retained call keeps compact indexed metadata plus its compressed full payload; when the count is exceeded, the oldest complete calls retire by invocation start order. Latest completed Shell activity is retained independently so activity status survives call-history eviction and restart.
+
+Tool-call history, live Activity, and the read-only API include `client_name` (the client-declared MCP `initialize.clientInfo.name`) and `client_session_id` (an optional, best-effort logical session hint). OpenAI's `x-openai-session` header is currently the only recognized logical-session source and uses an `openai:` namespace; other clients still report their standard name, with `client_session_id: null` when no recognized hint exists. Neither field proves user identity or authorizes host access. Session hints are stored verbatim and may be sensitive; protect them using the existing tool-log and Observability API access controls. The existing `session` retains its MCP transport-session meaning. See [Activity Observability — Identity Rules](docs/architecture/08-cross-cutting-concepts/activity-observability.md#identity-rules) for authoritative extraction, ambiguity, and compatibility semantics.
 
 In remote mode, `PUBLIC_BASE_URL` must be the externally reachable HTTPS origin without a trailing slash.
 

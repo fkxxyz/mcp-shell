@@ -63,6 +63,48 @@ test("tool history preserves complete calls, durable previews, and exact retenti
   });
 });
 
+test("concurrent invocations keep independent client identity through live and retained success/error", async () => {
+  await withToolHistory(10, async ({ recorder, store, tracker }) => {
+    const opened = tracker.openFeed();
+    const one = withToolLogContext({ clientName: "client-one", clientSessionId: "openai:one" }, () =>
+      recorder.run({ tool: "first", input: {}, cwd: "/one" }, async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        return { ok: true };
+      }));
+    const two = withToolLogContext({ clientName: "client-two", clientSessionId: "openai:two" }, () =>
+      recorder.run({ tool: "second", input: {}, cwd: "/two" }, async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        throw new Error("expected tool error");
+      }));
+
+    const results = await Promise.allSettled([one, two]);
+    assert.equal(results[0]?.status, "fulfilled");
+    assert.equal(results[1]?.status, "rejected");
+
+    const events = await Promise.all(Array.from({ length: 4 }, () => opened.feed.next()));
+    opened.feed.close();
+    for (const [tool, name, session] of [
+      ["first", "client-one", "openai:one"],
+      ["second", "client-two", "openai:two"],
+    ]) {
+      assert.deepEqual(events.filter((event) => event?.call.tool === tool).map((event) => [
+        event?.call.clientName, event?.call.clientSessionId,
+      ]), [
+        [name, session], [name, session],
+      ]);
+      const stored = store.readRecent(10).find((call) => call.tool === tool)!;
+      assert.equal(stored.clientName, name);
+      assert.equal(stored.clientSessionId, session);
+      const payload = await store.readCall(stored.id);
+      assert.equal(payload.kind, "found");
+      if (payload.kind === "found") {
+        assert.equal(payload.record.client_name, name);
+        assert.equal(payload.record.client_session_id, session);
+      }
+    }
+  });
+});
+
 test("retention keeps newest calls by invocation start order when completion is out of order", async () => {
   await withToolHistory(1, async ({ dir, store, recorder }) => {
     let releaseSlow!: () => void;

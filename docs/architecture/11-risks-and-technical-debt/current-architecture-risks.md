@@ -45,6 +45,20 @@ Inputs and outputs may contain source code, file contents, command output, crede
 
 Control: store logs under owner-controlled local paths with restrictive permissions and bounded payload retention; treat log access as sensitive.
 
+## Client-Declared Logical Sessions Are Linkable and Unverified
+
+- **Root cause:** `client_session_id` is an optional, client-supplied correlation hint stored verbatim in both indexed history and full call records, and exposed through the read-only Observability API. The server does not know the vendor's identity lifetime or whether the identifier contains sensitive material.
+- **Primary cost dimension:** privacy and misleading-correlation risk.
+- **Current cost:** authorized observability readers can correlate multiple operations by an opaque identifier even without opening tool payloads; a leaked read credential therefore discloses cross-call linkage as well as existing sensitive logs. Client changes could also break logical-session continuity while still producing syntactically valid identifiers.
+- **Evidence:** the 2026-10-08 ChatGPT probe saw stable `x-openai-session` groups and consistent pairing with `_meta`, but its 280 unequal paired fingerprints **cannot establish raw-value inequality**: Header strings were hashed directly while `_meta` strings were JSON-stringified first. Raw-value equivalence remains unverified. The OpenAI adapter deliberately uses only the Header, and unrecognized clients expose `null`; this avoids unverified source switching but does not establish vendor stability or data sensitivity.
+- **Cost mechanism:** verbatim client-controlled metadata becomes a durable, queryable identifier. Namespace prefixes prevent accidental mixing between adapter families, but do not anonymize or validate a user's identity.
+- **Reachable better state:** if real exposure or client lifecycle requirements justify it, replace verbatim identifiers with a stable server-keyed HMAC or an equivalent scoped pseudonym, with explicit key rotation, old-history handling, and source-specific stability tests. Do not add a user/account system or treat a client hint as proof of authority.
+- **Governing constraint:** client-session correlation must remain best-effort, independent of authentication, and no more linkable or revealing than the supported observability use case requires.
+- **Scope discovery:** include request adapter/header ingestion, record and SQLite fields, in-process Activity, SSE and JSON DTOs, log retention, Observability API read credentials, migration of old identifiers, and client reconnect/restart observations.
+- **Repair direction:** first establish whether identifiers are actually sensitive or low entropy and who consumes call correlation. If pseudonymization becomes material, design a persistent key and rotation lifecycle before changing the public field's semantics.
+- **Exit criteria:** privacy/stability risks are bounded by documented evidence and accepted policy, or identifier exposure is replaced by a tested, stable scoped pseudonym whose restart, rotation, legacy-history and API behavior are explicit.
+- **Priority:** medium if call-history access broadens; currently a recognized sensitivity and contract risk, not an observed data leak.
+
 ## External Observability API Compatibility Lacks an Independent Contract Baseline
 
 - **Root cause:** `/api/v1/*` is a supported interface for independently released clients, but its declared shapes and expectations are maintained mainly as shared server/Web TypeScript DTOs, evolving black-box HTTP tests, and prose. No independently held version-1 baseline is compared with proposed changes.
@@ -78,14 +92,28 @@ Control: store logs under owner-controlled local paths with restrictive permissi
 - **Root cause:** the process-local Activity projection can keep serving live state during history-store failure, but durable latest-Shell-event continuity and historical call reads still share `ObservabilityStore` initialization/persistence. The external API does not expose one explicit model of which observability capabilities remain available or how they recover.
 - **Primary cost dimension:** diagnosis and monitoring reliability.
 - **Current cost:** a failed `history.db` initialization or later write can leave current running/recent activity available while retained history and post-restart Shell active continuity are unavailable or stale. API consumers may see inconsistent availability or generic failures without being able to distinguish live success from degraded durability.
-- **Evidence:** the Observability API work added `shell_activity` to the same SQLite metadata transaction as complete calls, preserved best-effort recorder semantics, and continued to initialize the store once per process with restart as retry boundary. It did not add a structured degraded-state API or external recovery/health contract.
+- **Evidence:** the Observability API work added `shell_activity` to the same SQLite metadata transaction as complete calls, preserved best-effort recorder semantics, and continued to initialize the store once per process with restart as retry boundary. It did not add a structured degraded-state API or external recovery/health contract. During 2026-10-08 client-identity development, a SQL placeholder mismatch caused store initialization to fail while the MCP tools still executed; tests detected failed history API reads. The local SQL defect was corrected, but the generic partial-health mechanism remains.
 - **Cost mechanism:** partial service health is implicit across runtime memory and durable storage; monitors lack a stable way to detect and report incomplete durability, and operators must infer the failure from logs or endpoint-specific symptoms.
 - **Reachable better state:** document which read models work without durable storage and expose the minimum useful explicit degradation signal plus recovery procedure. Separate persistence failure domains only if measurements or incidents show that isolation would materially reduce impact.
 - **Governing constraint:** read clients can distinguish authoritative currently available activity from missing/stale durable history and can diagnose loss of restart continuity without assuming a successful HTTP response implies complete observability health.
 - **Scope discovery:** include startup migration, SQLite failure/recovery, `ToolCallRecorder` best-effort persistence, `ActivityTracker` bootstrap, query fallback, HTTP errors, direct Shell status, SSE/polling, restart behavior, logs, and operator recovery steps.
 - **Repair direction:** define failure modes and test one degraded startup/write path before selecting minimal health/status semantics. Do not create a second SQLite database or generic service-health framework merely because two semantic lifetimes share storage.
 - **Exit criteria:** an intentionally failed observability-store initialization or write yields a documented and testable external degradation signal, live/recent behavior remains appropriately isolated, and restart/recovery expectations are explicit.
-- **Priority:** low until external monitors depend on high-confidence history/continuity; the failure domain is credible, but no material production incident or availability target has yet justified a storage split.
+- **Priority:** medium for failure visibility because the degraded pathway has been exercised; separating storage remains unjustified without production evidence. Do not close this debt merely because the offending SQL statement was fixed.
+
+## Observability Schema Upgrades Lack an Explicit Rollback Path
+
+- **Root cause:** `ObservabilityStore` supports forward-only schema upgrades, but production binary rollback and SQLite schema rollback are not a coordinated deployment operation. An older binary may reject a newer `PRAGMA user_version` even when its own files were safely restored.
+- **Primary cost dimension:** operator recovery and release risk.
+- **Current cost:** if a release fails after a v2→v3 schema upgrade, reverting only code or compiled artifacts can leave history and durable Shell activity unreadable by the previous server version. Restoring an older database may discard newer activity, and deleting `history.db` loses independently retained Shell-presence continuity.
+- **Evidence:** client-identity work introduces two nullable columns and SQLite schema v3. A frozen historical v2 fixture verifies forward upgrade, but does not prove rollback compatibility. The existing `Production Releases Lack an Atomic Artifact Switch` debt addresses artifact coherence, not database recovery.
+- **Cost mechanism:** persistent schema version advances in place while the deploy path lacks a version-aware database backup/compatibility gate and recovery instructions. Observability is best-effort, so a history-store failure can coexist with a seemingly operational MCP host-tool service.
+- **Reachable better state:** define a narrow release-time schema preflight and bounded backup/restore procedure, or an explicitly supported N−1 read-compatibility window. Ensure rollback includes preserved `shell_activity` semantics and WAL sidecars, without adding a generic migration framework.
+- **Governing constraint:** operators can recover or deliberately accept a documented history gap after a failed release without accidentally treating a code rollback as a safe database rollback.
+- **Scope discovery:** include `SCHEMA_VERSION`, startup migration/transaction semantics, persistent history and `shell_activity`, WAL/shm files, gzip retention, service restart, build artifact rollback, degraded-state signaling, and the frozen v2 fixture.
+- **Repair direction:** coordinate with artifact release-atomicity work to design and test one real upgrade→failed-deploy→rollback exercise. Do not add reverse SQL migrations casually where writes under the new schema could be lost.
+- **Exit criteria:** a failed v3 rollout has a documented and tested restore/compatibility path that preserves defined history and Shell activity guarantees, with a concrete failure signal if recovery is impossible.
+- **Priority:** medium; the mismatch arises at every schema-changing release, but a broad migration subsystem is not justified for the current one-process service.
 
 ## Shell Detail Live-Call Overlay Is Bounded by Workspace Recent Calls
 

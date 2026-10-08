@@ -45,6 +45,8 @@ Authorization-code, access-token, and refresh-token state is persisted asynchron
 4. A new `McpServer` is constructed and all tools are registered for that transport.
 5. The initialized transport is stored in the process-local session map.
 
+The session entry also retains its `McpServer`, so later tool requests can read the standard `clientInfo.name` from the SDK's initialized client version. That name is observational and is not an authorization claim.
+
 A request with an unknown session ID, or a sessionless non-initialize POST, is rejected as a bad MCP request.
 
 ## Shell Bootstrap
@@ -70,10 +72,10 @@ The skill tree is global and mutable. Therefore a skill advertised during Shell 
 ## Tool Invocation
 
 1. `/mcp` resolves the transport from the session ID.
-2. Tool-log context carries the session and bearer-derived actor fingerprint.
+2. Tool-log context carries the MCP transport session, bearer-derived actor fingerprint, standard client name, and optional namespaced logical client-session hint. The shared resolver applies the [Activity Observability identity rules](../08-cross-cutting-concepts/activity-observability.md#identity-rules); individual tools do not interpret client-specific headers or metadata.
 3. The MCP SDK dispatches the selected registered tool.
 4. A Shell-aware tool enters the shared invocation helper, which resolves its `shell_id` through `ShellStore`; unknown IDs fail without falling back to a process working directory.
-5. `ToolCallRecorder` publishes the running call to the bounded activity projection before executing the tool.
+5. `ToolCallRecorder` snapshots client identity once and publishes the running call to the bounded activity projection before executing the tool.
 6. Relative operations use the resolved Shell `cwd`.
 7. After execution, `ObservabilityStore` attempts to persist the completed success/error record plus bounded preview and enforce complete-call retention.
 8. `ToolCallRecorder` publishes the completed activity state, including whether full payload detail was retained.

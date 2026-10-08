@@ -1,11 +1,15 @@
 export type ToolLogContext = {
   session?: string;
   actor?: string;
+  clientName?: string;
+  clientSessionId?: string;
 };
 
 export type ToolCallIdentity = {
   id: string;
   tool: string;
+  clientName?: string;
+  clientSessionId?: string;
   shellId?: number;
   cwd?: string;
   inputPreview?: Record<string, unknown>;
@@ -49,6 +53,8 @@ export type ToolCallRecord = {
   duration_ms: number;
   session?: string;
   actor?: string;
+  client_name?: string | null;
+  client_session_id?: string | null;
   tool: string;
   input: unknown;
   status: ToolCallStatus;
