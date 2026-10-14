@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     console.log(`Config file:    ${config.paths.envFile}`);
     if (config.mode === "remote") console.log(`OAuth clients:  ${config.paths.oauthClientsFile}`);
     console.log(`Shell env file: ${config.paths.shellEnvFile ?? "(none)"}`);
+    console.log(`Upstreams file: ${config.paths.upstreamsFile ?? "(none)"}`);
   });
 
   let shuttingDown = false;

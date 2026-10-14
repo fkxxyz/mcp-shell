@@ -14,6 +14,7 @@ export function makeConfig(overrides: Partial<RemoteAppConfig["oauth"]> = {}): R
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",
     },
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: {
       dir: "/unused/tool-logs",
       maxCalls: 10_000,

@@ -105,6 +105,14 @@ Shell-aware tools require `shell_id`, resolve it through `ShellStore`, and root 
 
 `src/runtime/drain-gate.ts` provides the narrow close-admission-and-drain primitive shared by HTTP and tool lifecycle boundaries. `src/host/paths.ts` owns shared host-path resolution. `FileMutationCoordinator` provides process-local serialization for structured file mutations without claiming filesystem locking. `ProcessSupervisor` owns registered tool child processes; application shutdown gives active tools three seconds to finish naturally, then the supervisor sends process-group `SIGTERM`, waits one second, and escalates survivors to `SIGKILL`. `LSPServerManager` owns the reusable LSP-client pool and its idle lifecycle. LSP server selection prepares one launch specification from the detected workspace, server-specific environment, LSP supplemental paths, and application command policy; `LspClient` starts the already-resolved executable through the stdio connection and advances protocol state from actual responses/notifications. These resources are application-owned and shared across MCP sessions rather than process-global or session-local.
 
+## Upstream MCP Proxy (`src/upstream/`)
+
+- `config.ts`: parsing and validation of optional `~/.mcp-shell/upstreams.yaml`, including rejection of non-HTTP schemes, embedded credentials, and self-reference;
+- `connection.ts`: one shared Streamable HTTP client per upstream, reconnect-on-next-call after transport failure, and timeout mapping;
+- `proxy.ts`: startup tool-list fetch, conversion of upstream JSON Schema, registration of proxied tools through the invocation gate, and result bounding.
+
+Startup fails if an upstream is unreachable or a proxied tool name collides with another tool. See `09-architecture-decisions/upstream-mcp-proxy.md`.
+
 ## Command Policy (`src/command-path.ts`, `bin/`)
 
 `applyCommandPath` pins user command overrides first and repository command wrappers second. `resolveExecutable` resolves a command against the exact cwd and effective environment used for execution, including platform-specific executable rules. The repository wrappers currently bound `rg`, `grep`, `find`, and `fd` unless `--unsafe` is supplied.

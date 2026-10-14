@@ -8,6 +8,7 @@ import type { SkillCatalog } from "../skills.js";
 import type { InvocationGate } from "../tools/invocation-gate.js";
 import type { LSPServerManager } from "../tools/lsp.js";
 import { registerTools } from "../tools/index.js";
+import { registerUpstreamTools, type UpstreamSet } from "../upstream/proxy.js";
 
 export function createMcpServer(
   invocations: InvocationGate,
@@ -18,8 +19,10 @@ export function createMcpServer(
   mutations: FileMutationCoordinator,
   processes: ProcessSupervisor,
   lspManager: LSPServerManager,
+  upstreams: UpstreamSet,
 ): McpServer {
   const server = new McpServer({ name: "mcp-shell", version: "0.1.0" });
   registerTools(server, invocations, shells, recorder, commandPath, skills, mutations, processes, lspManager);
+  registerUpstreamTools(server, upstreams, invocations);
   return server;
 }

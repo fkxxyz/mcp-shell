@@ -178,6 +178,7 @@ test("MCP create_shell feeds shell_id into relative file operations", async () =
       userBinDir: join(dir, "user-bin"),
       repoBinDir: join(dir, "repo-bin"),
     },
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: {
       dir: join(dir, "tool-logs"),
       maxCalls: 10_000,

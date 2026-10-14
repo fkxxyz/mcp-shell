@@ -19,6 +19,7 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `src/contracts/` owns shared JSON/SSE DTO shapes for the versioned Observability API without exposing backend implementation objects.
 - `src/tools/` contains modular MCP registrations and tool adapters. `basic.ts` registers application-owned `read`, `write`, `edit`, and `bash` implementations under `src/tools/basic/`; `apply-patch.ts` owns structured patching, while `lsp.ts` owns LSP server/config selection, reusable-client management, workspace-edit application, formatting, and MCP presentation.
 - `src/lsp/` contains the reusable LSP runtime boundaries: `connection.ts` owns stdio/JSON-RPC lifecycle, while `client.ts` owns initialization, capabilities, document synchronization, feature requests, and diagnostics convergence.
+- `src/upstream/` proxies optional unauthenticated Streamable HTTP upstreams: `config.ts` validates `upstreams.yaml`, `connection.ts` shares one client per upstream, and `proxy.ts` registers their startup-fetched tools. See `docs/architecture/09-architecture-decisions/upstream-mcp-proxy.md`.
 - `src/host/` contains narrow cross-tool host mechanisms for path resolution, structured file-mutation coordination, and supervised child-process lifecycle.
 - `web/` is the React + TypeScript Web Console built by Vite. TanStack Router owns routes, TanStack Query owns request-derived server state, and the Activity feature keeps SSE/live ordering logic feature-local.
 - `docs/architecture/` contains architecture Views and navigation/governance metadata.
@@ -60,7 +61,7 @@ bun archdoc.ts check
 3. `POST /authorize` checks the single configured owner password and redirects back with a short-lived authorization code.
 4. `POST /token` authenticates the registered public or confidential client and exchanges its code and PKCE verifier for a one-hour client-bound bearer access token and refresh token. Refresh tokens rotate on use.
 5. The client sends authenticated MCP requests to `/mcp`. The bearer token is checked before the request reaches the MCP transport.
-6. MCP requests expose `read`, `write`, `edit`, `bash`, `apply_patch`, and six LSP tools.
+6. MCP requests expose `read`, `write`, `edit`, `bash`, `apply_patch`, six LSP tools, and any tools from configured upstreams. Proxied calls bypass the tool-call recorder and shell lookup.
 
 ## HTTP Endpoints
 
@@ -75,7 +76,7 @@ bun archdoc.ts check
 
 ## Configuration
 
-Configuration files: `~/.mcp-shell/env` and, in remote mode, `~/.mcp-shell/oauth-clients.yaml`. On first start, the app creates templates and exits; replace placeholders before restarting. Existing process environment variables override values from `env`.
+Configuration files: `~/.mcp-shell/env`, in remote mode `~/.mcp-shell/oauth-clients.yaml`, and optional `~/.mcp-shell/upstreams.yaml` for upstream MCP servers (Streamable HTTP only; any unreachable upstream or tool-name collision fails startup; no name prefixes). On first start, the app creates templates and exits; replace placeholders before restarting. Existing process environment variables override values from `env`.
 
 Required settings:
 
@@ -101,6 +102,8 @@ The repository command layer wraps `rg`, `find`, `fd`, and `grep` with a 200ms w
 
 ## Development
 
+Feature work uses a sibling git worktree named `../mcp-shell-<topic>` on branch `feat/<topic>`, so `master` stays clean. Remove the worktree after its branch is merged.
+
 Install development dependencies with `npm install --include=dev`; this keeps the repository bootstrap independent of an inherited `NODE_ENV=production`. For development, run the server watcher and Vite together with:
 
 ```sh
@@ -119,3 +122,5 @@ npm run dev
 - The Web Console and backend are one repository, one release, one origin, and one production deployment unit; there is no independent frontend service or SSR layer.
 - The versioned Observability API is read-only and is a first-class interface for scripts, monitors, agents, and the Web Console. The first API or Web mutation requires an explicit security reassessment rather than inheriting the current read authority automatically.
 - User-level systemd lifecycle policy has a repository-owned install/check path, but production build artifacts are still updated in place rather than switched atomically as a release unit.
+
+- Upstream proxying is Streamable HTTP only and fixed at startup. Each upstream has one connection shared by all MCP sessions, so upstreams must be stateless or tolerate concurrent callers. Proxied calls are not recorded in tool history, and upstream tools carry full host authority.

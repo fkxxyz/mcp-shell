@@ -92,6 +92,7 @@ test("HTTP MCP client identity survives reconnect and process restart without me
     mode: "local",
     port: 0,
     commandPath: { userBinDir: join(dir, "user-bin"), repoBinDir: join(dir, "repo-bin") },
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: { dir: join(dir, "tool-logs"), maxCalls: 100 },
     paths: {
       configDir: dir, envFile: join(dir, "env"), shellEnvFile: null,

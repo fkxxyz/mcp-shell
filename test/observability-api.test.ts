@@ -414,6 +414,7 @@ function makeLocalConfig(configDir: string, webPassword?: string): LocalAppConfi
       userBinDir: join(configDir, "user-bin"),
       repoBinDir: join(configDir, "repo-bin"),
     },
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: {
       dir: join(configDir, "tool-logs"),
       maxCalls: 10_000,
@@ -438,6 +439,7 @@ function makeRemoteConfig(
   return {
     ...base,
     ...options,
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: {
       dir: join(configDir, "tool-logs"),
       maxCalls: 10_000,

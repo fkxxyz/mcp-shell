@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { applyCommandPath, type CommandPathPolicy } from "./command-path.js";
 import { loadOAuthClients, type OAuthClient } from "./auth/oauth-clients.js";
+import { loadUpstreamConfig, type UpstreamConfig } from "./upstream/config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,7 @@ type BaseAppConfig = {
   commandPath: CommandPathPolicy;
   webPassword?: string;
   observabilityToken?: string;
+  upstreams: UpstreamConfig;
   toolLogs: {
     dir: string;
     maxCalls: number;
@@ -28,6 +30,7 @@ type BaseAppConfig = {
     shellEnvFile: string | null;
     stateFile: string;
     oauthClientsFile?: string;
+    upstreamsFile?: string;
     shellsDbFile: string;
     userBinDir: string;
     repoBinDir: string;
@@ -56,6 +59,7 @@ export async function loadConfig(): Promise<AppConfig> {
   const envFile = join(configDir, "env");
   const stateFile = join(configDir, "state.json");
   const oauthClientsFile = join(configDir, "oauth-clients.yaml");
+  const upstreamsFile = join(configDir, "upstreams.yaml");
   const shellsDbFile = join(configDir, "shells.db");
   const userBinDir = join(configDir, "bin");
   const repoBinDir = fileURLToPath(new URL("../bin/", import.meta.url));
@@ -94,20 +98,26 @@ export async function loadConfig(): Promise<AppConfig> {
     webPassword,
     observabilityToken,
     toolLogs: { dir: toolLogDir, maxCalls: toolLogMaxCalls },
-    paths: { configDir, envFile, shellEnvFile, stateFile, oauthClientsFile, shellsDbFile, userBinDir, repoBinDir },
+    paths: { configDir, envFile, shellEnvFile, stateFile, oauthClientsFile, upstreamsFile, shellsDbFile, userBinDir, repoBinDir },
   };
 
-  if (mode === "local") return { ...common, mode };
+  const port = common.port;
+  if (mode === "local") {
+    const upstreams = await loadUpstreamConfig(upstreamsFile, { port });
+    return { ...common, mode, upstreams };
+  }
 
   const publicBaseUrl = validatePublicBaseUrl(
     mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
   );
   const oauthClients = await loadOAuthClients(oauthClientsFile, process.env);
+  const upstreams = await loadUpstreamConfig(upstreamsFile, { port, publicBaseUrl });
 
   return {
     ...common,
     mode,
     publicBaseUrl,
+    upstreams,
     oauth: {
       clients: oauthClients.clients,
       ...(oauthClients.legacy ? { legacyClientId: oauthClients.clients[0]?.clientId } : {}),
@@ -141,6 +151,7 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "WEB_PASSWORD=",
       "# Optional bearer token for the read-only /api/v1 observability API.",
       "OBSERVABILITY_TOKEN=",
+      "# Optional upstream MCP servers (Streamable HTTP) are listed in ~/.mcp-shell/upstreams.yaml.",
       "# Optional shell file to source at startup for PATH and other user environment variables:",
       "SHELL_ENV_FILE=~/.shellenv",
       "",

@@ -17,6 +17,7 @@ function makeLocalConfig(configDir: string): LocalAppConfig {
       userBinDir: "/unused/user-bin",
       repoBinDir: "/unused/repo-bin",
     },
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: {
       dir: join(configDir, "tool-logs"),
       maxCalls: 10_000,
@@ -81,6 +82,7 @@ test("remote mode keeps all-interface binding and bearer-protected /mcp", async 
   const base = makeConfig();
   const config: RemoteAppConfig = {
     ...base,
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: {
       dir: join(dir, "tool-logs"),
       maxCalls: 10_000,
@@ -129,6 +131,7 @@ test("remote startup migrates legacy token state before admitting the configured
   const config: RemoteAppConfig = {
     ...base,
     oauth: { ...base.oauth, legacyClientId: base.oauth.clients[0]!.clientId },
+    upstreams: { timeoutMs: 60_000, upstreams: [] },
     toolLogs: { dir: join(dir, "tool-logs"), maxCalls: 10_000 },
     paths: {
       ...base.paths,

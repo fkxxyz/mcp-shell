@@ -304,3 +304,59 @@ Control: clients must reinitialize MCP sessions after reconnect. Do not infer MC
 Shell IDs are never reused and there is intentionally no list or close operation, so `shells.db` grows with created Shells.
 
 Control: keep each Shell row compact and use indexed point lookup by ID so runtime cost does not scale with total history. Reassess retention only if persistent disk growth becomes material.
+
+## Upstream Proxy Schema Pre-Validation Is Partial
+
+- **Root cause:** upstream tool schemas are converted with `fromJSONSchema`, which ignores keywords it does not model instead of rejecting them.
+- **Primary cost dimension:** correctness and diagnosis.
+- **Current cost:** a call that depends on an ignored keyword passes mcp-shell's pre-validation and reaches the upstream, which must reject it. The error then comes from the upstream, not from mcp-shell, and the converted schema advertised to clients can be looser than the upstream's own.
+- **Evidence:** a direct check confirmed that `pattern` and `format` are enforced, and that unrecognized keywords are silently ignored rather than causing a conversion error. The check did not establish whether every common JSON Schema construct behaves identically.
+- **Cost mechanism:** the advertised schema and the enforced schema can diverge without any signal at startup.
+- **Reachable better state:** either reject schemas containing keywords outside a supported subset at startup, or forward the upstream's own input schema unchanged once the SDK offers raw JSON Schema tool registration.
+- **Governing constraint:** the upstream remains the authority for its own tools; mcp-shell's conversion must never weaken that authority or hide the divergence.
+- **Scope discovery:** `src/upstream/proxy.ts` conversion, the upstream decision record, and the tests covering proxied listing and invalid-input error paths.
+- **Repair direction:** start with a startup warning or rejection for unsupported keywords; avoid a general JSON Schema engine.
+- **Exit criteria:** a representative upstream schema with an unsupported keyword is either rejected at startup or forwarded faithfully, and the converted schema is covered by a test.
+- **Priority:** low; the upstream still validates every call.
+
+## Upstream Transport-Failure Classification Is Coarse
+
+- **Root cause:** `isTransportFailure` treats every non-`McpError` `Error` as a dropped connection.
+- **Primary cost dimension:** availability and diagnosis.
+- **Current cost:** a non-transport error raised inside mcp-shell's proxy path would drop a healthy upstream connection and trigger a reconnect, while the message reports the upstream as unavailable.
+- **Evidence:** the classification is inferred from the code path, and no test injects a non-transport error. Repeated runs of the proxy tests passed, and the reconnect test is deterministic under current conditions.
+- **Cost mechanism:** the classifier relies on the absence of an SDK error type rather than the presence of a transport signal.
+- **Reachable better state:** classify only errors raised by the transport (connection refused, reset, closed stream, or session-expired status) as failures, and let other errors surface unchanged.
+- **Governing constraint:** a failed call must never be retried, and a healthy connection must not be discarded because of an unrelated error.
+- **Scope discovery:** `src/upstream/connection.ts`, the SDK transport error types it can observe, and the reconnect and timeout tests.
+- **Repair direction:** narrow the classifier after reproducing a non-transport error path; do not change reconnect behavior without evidence.
+- **Exit criteria:** an injected non-transport error leaves the connection in place, and an injected transport failure still triggers reconnect on the next call.
+- **Priority:** low until a concrete misclassification is observed.
+
+## Tool-Name Authority Is Implicit in the SDK
+
+- **Root cause:** collision detection relies on `McpServer` rejecting duplicate tool names when a second registration is attempted.
+- **Primary cost dimension:** correctness across SDK upgrades.
+- **Current cost:** if a future SDK silently replaces an existing tool, startup no longer detects proxied-tool collisions, and a built-in tool could be shadowed without any error.
+- **Evidence:** the collision test covers the current SDK behavior at both the registration helper and the `createApp` startup path.
+- **Cost mechanism:** the authority for tool names lives in a library's side effect rather than in mcp-shell's own state.
+- **Reachable better state:** keep an explicit set of registered names inside mcp-shell and check it before registering each proxied tool.
+- **Governing constraint:** a tool name must belong to exactly one source, and that uniqueness must not depend on library behavior.
+- **Scope discovery:** `src/upstream/proxy.ts`, the probe registration in `src/http/app.ts`, and the collision tests.
+- **Repair direction:** add an explicit name set during registration; keep the SDK check as a second guard.
+- **Exit criteria:** collisions are detected by mcp-shell's own check, and the existing tests still pass.
+- **Priority:** low; the current SDK behavior is covered by tests.
+
+## Upstream Calls Are Not Observable Through mcp-shell
+
+- **Root cause:** proxied calls are intentionally excluded from tool-call history, Activity, and the Web Console.
+- **Primary cost dimension:** operability and diagnosis.
+- **Current cost:** an operator investigating a proxied failure must read the upstream's logs and mcp-shell's process logs separately, and a proxied call leaves no durable record in mcp-shell.
+- **Evidence:** the decision record states the exclusion. Shutdown and refusal behavior is tested, but there is no observability test for proxied calls.
+- **Cost mechanism:** the recorder and the proxy path are separate, so proxied calls do not reach the same evidence store.
+- **Reachable better state:** record upstream name, tool name, duration, and outcome class without arguments, reusing the recorder.
+- **Governing constraint:** every tool invocation that reaches a host-authority-bearing upstream is attributable in mcp-shell's evidence.
+- **Scope discovery:** `src/observability/`, the recorder call sites in `src/tools/invoke.ts`, and the upstream proxy path.
+- **Repair direction:** route proxied calls through the recorder with a minimal metadata set; do not store arguments or results beyond current policy.
+- **Exit criteria:** a proxied call appears in tool history with upstream attribution and no arguments.
+- **Priority:** medium; proxied tools carry full host authority and are currently invisible to the evidence trail.

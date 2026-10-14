@@ -21,6 +21,8 @@ import { SkillCatalog } from "../skills.js";
 import { DrainGate } from "../runtime/drain-gate.js";
 import { InvocationGate } from "../tools/invocation-gate.js";
 import { LSPServerManager } from "../tools/lsp.js";
+import { UpstreamSet } from "../upstream/proxy.js";
+import { createMcpServer } from "../mcp/server.js";
 import { createRequireWebBasicAuth } from "./web-auth.js";
 import {
   assertWebUiBuild,
@@ -82,6 +84,25 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   const mutations = new FileMutationCoordinator();
   const processes = new ProcessSupervisor();
   const lspManager = dependencies.lspManager ?? new LSPServerManager();
+  const upstreams = await UpstreamSet.connect(config.upstreams);
+  try {
+    // Conflicts are detected by registering every proxied tool on a server that already holds the native tools.
+    const probe = createMcpServer(
+      invocations,
+      shells,
+      recorder,
+      config.commandPath,
+      skills,
+      mutations,
+      processes,
+      lspManager,
+      upstreams,
+    );
+    await probe.close();
+  } catch (error) {
+    await upstreams.close();
+    throw error;
+  }
   const sessions = new McpSessionManager(
     invocations,
     shells,
@@ -91,6 +112,7 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
     mutations,
     processes,
     lspManager,
+    upstreams,
   );
 
   if (config.mode === "local") {
@@ -163,6 +185,8 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
       processes.close(),
       lspManager.close(),
     ]);
+    // Closing upstream clients fails any proxied call still waiting after the grace period, so the drain below can finish.
+    await upstreams.close();
     await invocations.drained();
     await requests.drained();
     await sessions.close();

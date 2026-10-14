@@ -10,6 +10,7 @@ import type { ShellStore } from "../shell-store.js";
 import type { SkillCatalog } from "../skills.js";
 import type { InvocationGate } from "../tools/invocation-gate.js";
 import type { LSPServerManager } from "../tools/lsp.js";
+import type { UpstreamSet } from "../upstream/proxy.js";
 import { createMcpServer } from "./server.js";
 
 export class McpSessionManager {
@@ -29,6 +30,7 @@ export class McpSessionManager {
     private readonly mutations: FileMutationCoordinator,
     private readonly processes: ProcessSupervisor,
     private readonly lspManager: LSPServerManager,
+    private readonly upstreams: UpstreamSet,
   ) {}
 
   get(sessionId: string | undefined): StreamableHTTPServerTransport | undefined {
@@ -58,6 +60,7 @@ export class McpSessionManager {
       this.mutations,
       this.processes,
       this.lspManager,
+      this.upstreams,
     );
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),

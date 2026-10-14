@@ -137,6 +137,22 @@ Aliases are equivalent names for the same protected MCP resource, not separate a
 
 The simplest tunnel deployment can still use `MODE=local` with no built-in OAuth. Use remote mode plus resource aliases when the tunneled endpoint must retain mcp-shell OAuth, such as when the same instance also serves other authenticated network clients.
 
+### Upstream MCP servers (optional)
+
+Add unauthenticated upstream MCP servers to `~/.mcp-shell/upstreams.yaml` to expose their tools through this server's `/mcp` endpoint, alongside the built-in tools:
+
+```yaml
+version: 1
+timeoutMs: 60000          # optional; applies to every upstream call
+upstreams:
+  - name: docs           # used in logs and error messages; must be unique
+    url: http://127.0.0.1:9100/mcp
+```
+
+Only Streamable HTTP upstreams are supported. The file is optional; without it no upstreams are loaded. Every upstream must be reachable when mcp-shell starts, otherwise startup fails. A tool name that repeats a built-in tool or another upstream's tool also fails startup, so names are never prefixed or renamed. Proxied tools keep their upstream name, description, and annotations.
+
+All MCP sessions share one connection per upstream. After a transport failure, the next call reconnects; the failed call is not retried. Proxied calls are not recorded in tool history or the Web Console. Upstream tools run with the same full host authority as built-in tools, so put only trusted servers in this file. The file must not reference this server itself. Upstream tool sets are fixed at startup; restart mcp-shell after an upstream's tools change.
+
 ## Build and run
 
 ```bash
@@ -266,6 +282,7 @@ Important files and directories include:
 ```text
 ~/.mcp-shell/env
 ~/.mcp-shell/oauth-clients.yaml
+~/.mcp-shell/upstreams.yaml
 ~/.mcp-shell/state.json
 ~/.mcp-shell/shells.db
 ~/.mcp-shell/tool-logs/history.db
@@ -336,6 +353,7 @@ src/contracts/     shared API transport types
 src/auth/          OAuth and token handling
 src/http/          HTTP application
 src/mcp/           MCP server and session handling
+src/upstream/      proxied upstream MCP servers
 src/shell*.ts      durable Shell state and bootstrap
 src/skills.ts      global skill discovery and loading
 src/tools/         MCP tool implementations
