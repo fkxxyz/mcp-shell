@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { RemoteAppConfig } from "../config.js";
+import type { OAuthClient } from "./oauth-clients.js";
 import { AuthStateStore } from "./state-store.js";
 
 const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -16,13 +17,17 @@ export type AuthorizeParams = {
   state?: string;
 };
 
+export type TokenEndpointAuthMethod = "none" | "client_secret_basic" | "client_secret_post";
+
 export class OAuthService {
   private readonly acceptedResources: ReadonlySet<string>;
+  private readonly clients: ReadonlyMap<string, OAuthClient>;
 
   constructor(
     private readonly config: RemoteAppConfig,
     private readonly state: AuthStateStore,
   ) {
+    this.clients = new Map(config.oauth.clients.map((client) => [client.clientId, client]));
     this.acceptedResources = new Set([
       config.publicBaseUrl,
       ...config.oauth.resourceAliases,
@@ -31,11 +36,16 @@ export class OAuthService {
 
   validateAuthorizeParams(input: AuthorizeParams): { ok: true } | { ok: false; status: number; error: string } {
     if (input.responseType !== "code") return { ok: false, status: 400, error: "unsupported_response_type" };
-    if (input.clientId !== this.config.oauth.clientId) return { ok: false, status: 400, error: "invalid_client" };
-    if (!this.isAllowedRedirectUri(input.redirectUri)) return { ok: false, status: 400, error: "invalid_redirect_uri" };
+    const client = this.clients.get(input.clientId);
+    if (!client) return { ok: false, status: 400, error: "invalid_client" };
+    if (!this.isAllowedRedirectUri(client, input.redirectUri)) return { ok: false, status: 400, error: "invalid_redirect_uri" };
     if (!input.codeChallenge || input.codeChallengeMethod !== "S256") return { ok: false, status: 400, error: "invalid_pkce" };
     if (!this.isAcceptedResource(input.resource)) return { ok: false, status: 400, error: "invalid_resource" };
     return { ok: true };
+  }
+
+  clientName(clientId: string): string | undefined {
+    return this.clients.get(clientId)?.name;
   }
 
   verifyAdminPassword(password: string): boolean {
@@ -54,11 +64,19 @@ export class OAuthService {
     return code;
   }
 
-  validateClientCredentials(clientId: string, clientSecret: string): boolean {
-    return clientId === this.config.oauth.clientId && safeEqual(clientSecret, this.config.oauth.clientSecret);
+  validateClientCredentials(
+    clientId: string,
+    method: TokenEndpointAuthMethod,
+    clientSecret?: string,
+  ): boolean {
+    const client = this.clients.get(clientId);
+    if (!client) return false;
+    if (client.authentication === "public") return method === "none" && clientSecret === undefined;
+    return method !== "none" && clientSecret !== undefined && safeEqual(clientSecret, client.secret);
   }
 
   exchangeAuthorizationCode(input: {
+    clientId: string;
     code: string;
     redirectUri: string;
     verifier: string;
@@ -68,7 +86,8 @@ export class OAuthService {
     if (
       !record ||
       record.expiresAt < Date.now() ||
-      record.clientId !== this.config.oauth.clientId ||
+      record.clientId !== input.clientId ||
+      !this.clients.has(input.clientId) ||
       input.redirectUri !== record.redirectUri ||
       input.resource !== record.resource ||
       !this.isAcceptedResource(record.resource) ||
@@ -78,12 +97,13 @@ export class OAuthService {
       return null;
     }
 
-    return this.issueTokenPair(record.resource);
+    return this.issueTokenPair(record.clientId, record.resource);
   }
 
-  refreshAccessToken(refreshToken: string, resource: string): TokenPair | null {
+  refreshAccessToken(clientId: string, refreshToken: string, resource: string): TokenPair | null {
     const record = this.state.getRefreshToken(refreshToken);
     if (!record) return null;
+    if (record.clientId !== clientId || !this.clients.has(clientId)) return null;
     if (!this.isAcceptedResource(record.resource)) {
       this.state.consumeRefreshToken(refreshToken);
       return null;
@@ -91,27 +111,28 @@ export class OAuthService {
     if (record.resource !== resource) return null;
 
     this.state.consumeRefreshToken(refreshToken);
-    return this.issueTokenPair(record.resource);
+    return this.issueTokenPair(record.clientId, record.resource);
   }
 
   validateAccessToken(token: string): boolean {
     const record = this.state.getAccessToken(token);
-    if (!record || record.expiresAt < Date.now() || !this.isAcceptedResource(record.resource)) {
+    if (!record || record.expiresAt < Date.now() || !this.isAcceptedResource(record.resource) || !this.clients.has(record.clientId)) {
       if (record) this.state.deleteAccessToken(token);
       return false;
     }
     return true;
   }
 
-  private issueTokenPair(resource: string): TokenPair {
+  private issueTokenPair(clientId: string, resource: string): TokenPair {
     const accessToken = randomToken();
     const refreshToken = randomToken();
 
     this.state.setAccessToken(accessToken, {
+      clientId,
       resource,
       expiresAt: Date.now() + ACCESS_TTL_MS,
     });
-    this.state.setRefreshToken(refreshToken, { resource });
+    this.state.setRefreshToken(refreshToken, { clientId, resource });
 
     return {
       accessToken,
@@ -125,23 +146,10 @@ export class OAuthService {
     return this.acceptedResources.has(resource);
   }
 
-  private isAllowedRedirectUri(uri: string): boolean {
-    const { redirectUri, redirectUriAllowlist } = this.config.oauth;
-    if (redirectUri && uri === redirectUri) return true;
-
-    for (const rule of redirectUriAllowlist) {
-      if (rule.startsWith("prefix:")) {
-        if (uri.startsWith(rule.slice("prefix:".length))) return true;
-        continue;
-      }
-      if (rule.startsWith("exact:")) {
-        if (uri === rule.slice("exact:".length)) return true;
-        continue;
-      }
-      if (uri === rule) return true;
-    }
-
-    return false;
+  private isAllowedRedirectUri(client: OAuthClient, uri: string): boolean {
+    return client.redirectUris.some((rule) => rule.type === "exact"
+      ? uri === rule.value
+      : uri.startsWith(rule.value));
   }
 }
 

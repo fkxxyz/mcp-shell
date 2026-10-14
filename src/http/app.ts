@@ -124,8 +124,9 @@ export async function createApp(config: AppConfig, dependencies: AppDependencies
   if (config.mode === "local") {
     app.use("/mcp", createMcpRouter(sessions));
   } else {
-    authState = new AuthStateStore(config.paths.configDir, config.paths.stateFile);
+    authState = new AuthStateStore(config.paths.configDir, config.paths.stateFile, config.oauth.legacyClientId);
     await authState.load();
+    await authState.revokeUnregisteredClients(new Set(config.oauth.clients.map((client) => client.clientId)));
     const oauth = new OAuthService(config, authState);
 
     app.use(createOAuthRouter(config, oauth));

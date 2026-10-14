@@ -52,13 +52,16 @@ Owns:
 `src/auth/` owns:
 
 - OAuth discovery and authorization/token routes;
+- statically registered OAuth client configuration and per-client redirect/credential validation;
 - authorization parameter and PKCE validation;
 - one accepted-resource policy covering the primary public base URL plus configured aliases;
-- token issuance and refresh;
+- authorization-code exchange, client-bound token issuance, refresh, and removal-based grant revocation;
 - persisted authorization state;
 - bearer middleware and tool-log actor derivation.
 
 In the local profile, this block is not on the `/mcp` request path; in remote profile its responsibilities remain unchanged.
+
+The OAuth client YAML is loaded once at startup and is separate from the general `env` file. It is validated before the listener starts; configuration changes take effect on restart. Legacy single-client environment settings are accepted only while the client YAML is absent so existing token state can be migrated to its known client ID.
 
 ## MCP Runtime (`src/mcp/`)
 

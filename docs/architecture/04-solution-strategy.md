@@ -36,6 +36,8 @@ MCP session handling and tool registration are independent from deployment expos
 
 A trusted outbound tunnel does not introduce another mcp-shell authentication profile. The common personal-host path tunnels local mode; deployments that need mcp-shell OAuth for all callers may tunnel remote mode instead.
 
+Remote OAuth clients are statically registered in `~/.mcp-shell/oauth-clients.yaml`. Each registration owns its redirect rules and token binding; the owner password and full tool authority remain shared. Public clients use PKCE without a client secret; confidential clients authenticate with their configured secret. Dynamic registration and client-specific tool permissions are outside the current boundary.
+
 ## Single-Process Composition
 
 Express, OAuth services, persisted authorization state, durable Shell state, MCP session management, and tool registration live in one process. This keeps ownership and shutdown behavior explicit and matches the intended personal-host deployment scale.

@@ -62,9 +62,10 @@ Runtime configuration lives at:
 
 ```text
 ~/.mcp-shell/env
+~/.mcp-shell/oauth-clients.yaml
 ```
 
-On first startup, the server creates a template configuration and exits.
+On first startup, the server creates both template files and exits. Keep `env` for server settings and `oauth-clients.yaml` for remote OAuth client registrations. The OAuth client file must be readable only by its owner (`0600`); its directory is restricted to the owner (`0700`).
 
 Choose a connection mode:
 
@@ -79,10 +80,33 @@ For remote access, use:
 ```env
 MODE=remote
 PUBLIC_BASE_URL=https://mcp-shell.example.com
-OAUTH_CLIENT_ID=your-client-id
-OAUTH_CLIENT_SECRET=your-client-secret
 ADMIN_PASSWORD=your-password
 ```
+
+For remote mode, add each statically registered OAuth client to `~/.mcp-shell/oauth-clients.yaml`:
+
+```yaml
+version: 1
+clients:
+  - clientId: desktop-app
+    name: Desktop app
+    authentication: public
+    redirectUris:
+      - type: exact
+        value: http://127.0.0.1:43123/callback
+
+  - clientId: hosted-agent
+    name: Hosted agent
+    authentication: confidential
+    secret: "replace-with-at-least-32-random-characters"
+    redirectUris:
+      - type: prefix
+        value: https://agent.example.com/oauth/callback/
+```
+
+Use `public` for clients that cannot safely keep a secret; they must use PKCE S256. Use `confidential` only when the client can protect its secret. Generate a unique secret per confidential client, for example with `openssl rand -hex 32`. Redirects are exact by default; prefix rules must be explicit and narrow. Client IDs must be the IDs the MCP clients actually send. This is static registration: clients that require OAuth Dynamic Client Registration or cannot use a configured client ID are not supported by this setup. All registered clients still receive the same full host-tool authority after the owner password is approved.
+
+Existing installations without the YAML file continue to use a deprecated single-client environment fallback and log a warning on startup. This fallback is not automatically one-shot: it remains active until the YAML file exists. To migrate, start the updated server once with the old `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, and redirect settings so it can bind existing tokens to that client ID in `state.json`. Then add the same registration to YAML, remove the old OAuth variables from `env` and the process environment, and restart. Do not remove the legacy client ID before the state migration; old access and refresh tokens cannot otherwise be assigned safely.
 
 If `MODE` is omitted, it defaults to `remote` for compatibility with existing configurations.
 
@@ -90,8 +114,6 @@ Optional values include:
 
 ```env
 PORT=3000
-OAUTH_REDIRECT_URI=
-OAUTH_REDIRECT_URI_ALLOWLIST=
 OAUTH_RESOURCE_ALIASES=
 TOOL_LOG_DIR=
 TOOL_LOG_MAX_CALLS=10000
@@ -217,7 +239,7 @@ Relevant endpoints:
 /mcp
 ```
 
-The remote authorization model is intentionally simple: one configured OAuth client and one owner password.
+Remote mode supports multiple statically configured OAuth clients and one owner password. Each authorization code and token is bound to its client registration; removing a client and restarting revokes its persisted grants. Client registrations do not provide per-client tool permissions or separate owner accounts.
 
 ### Create a Shell
 
@@ -243,6 +265,7 @@ Important files and directories include:
 
 ```text
 ~/.mcp-shell/env
+~/.mcp-shell/oauth-clients.yaml
 ~/.mcp-shell/state.json
 ~/.mcp-shell/shells.db
 ~/.mcp-shell/tool-logs/history.db

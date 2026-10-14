@@ -39,7 +39,7 @@ facets:
 
 ## Authorization
 
-The current remote implementation has one configured OAuth client, one administrator password, PKCE S256, one advertised `full` scope, short-lived authorization codes, one-hour access tokens, and rotating refresh tokens.
+The current remote implementation supports statically registered OAuth clients, one administrator password, PKCE S256, one advertised `full` scope, short-lived authorization codes, one-hour access tokens, and rotating refresh tokens. Client registrations share the same full host authority; there are no user accounts, client-specific permissions, or dynamic registration.
 
 It is intentionally not a general identity platform.
 

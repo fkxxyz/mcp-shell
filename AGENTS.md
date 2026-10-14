@@ -12,7 +12,7 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `src/main.ts` is the composition root and process lifecycle entry point.
 - `src/config.ts` loads and validates runtime configuration.
 - `src/http/app.ts` assembles the Express application and owns application-level cleanup.
-- `src/auth/` contains OAuth protocol logic, token state persistence, bearer middleware, and HTTP routes.
+- `src/auth/` contains OAuth protocol logic, static client-registration loading, client-bound token state, bearer middleware, and HTTP routes.
 - `src/mcp/` contains MCP server construction, Streamable HTTP session management, and MCP routes.
 - `src/api/` owns the versioned read-only Observability API and its remote read-credential boundary.
 - `src/observability/` owns the unified tool-call lifecycle, durable completed-call history plus independent latest Shell activity, backend active policy, bounded live activity projection, and observability read models.
@@ -25,8 +25,8 @@ The MCP server exposes application-owned file and shell tools, a structured patc
 - `archdoc.ts` is the architecture documentation navigator and structural validator.
 - Express handles HTTP routes and form/JSON parsing.
 - `@modelcontextprotocol/sdk` implements the MCP server and Streamable HTTP transport.
-- OAuth authorization codes, access tokens, and refresh tokens are held in memory and persisted to `~/.mcp-shell/state.json` using atomic rename. The config and state directory/files are created with restrictive permissions.
-- MCP transports are kept in a process-local map keyed by MCP session ID. Restarting the process ends active sessions; persisted OAuth tokens can remain valid.
+- OAuth authorization codes, access tokens, and refresh tokens are held in memory and persisted to `~/.mcp-shell/state.json` using atomic rename. Remote OAuth clients are configured in `~/.mcp-shell/oauth-clients.yaml`; client secrets stay out of the process environment. The config and state directory/files are created with restrictive permissions.
+- MCP transports are kept in a process-local map keyed by MCP session ID. Restarting the process ends active sessions; persisted OAuth tokens remain valid while their client registration remains configured.
 
 ## Architecture Workflow
 
@@ -56,9 +56,9 @@ bun archdoc.ts check
 ## Request Flow
 
 1. A client reads the OAuth protected-resource and authorization-server metadata from the `/.well-known/` endpoints.
-2. The client visits `GET /authorize`; the server validates the client, redirect URI, resource, and PKCE parameters, then displays a password form.
+2. The client visits `GET /authorize`; the server resolves its configured client registration and validates that registration's redirect URI, resource, and PKCE parameters, then displays a password form.
 3. `POST /authorize` checks the single configured owner password and redirects back with a short-lived authorization code.
-4. `POST /token` exchanges the code and PKCE verifier for a one-hour bearer access token and a refresh token. Refresh tokens rotate on use.
+4. `POST /token` authenticates the registered public or confidential client and exchanges its code and PKCE verifier for a one-hour client-bound bearer access token and refresh token. Refresh tokens rotate on use.
 5. The client sends authenticated MCP requests to `/mcp`. The bearer token is checked before the request reaches the MCP transport.
 6. MCP requests expose `read`, `write`, `edit`, `bash`, `apply_patch`, and six LSP tools.
 
@@ -75,19 +75,18 @@ bun archdoc.ts check
 
 ## Configuration
 
-Configuration file: `~/.mcp-shell/env`. On first start, the app creates a template and exits; replace placeholder secrets before restarting. Existing process environment variables override values from this file.
+Configuration files: `~/.mcp-shell/env` and, in remote mode, `~/.mcp-shell/oauth-clients.yaml`. On first start, the app creates templates and exits; replace placeholders before restarting. Existing process environment variables override values from `env`.
 
 Required settings:
 
 - `PUBLIC_BASE_URL`: externally reachable HTTPS base URL, without a trailing slash.
-- `OAUTH_CLIENT_ID`: the single accepted OAuth client ID.
-- `OAUTH_CLIENT_SECRET`: client secret used at the token endpoint.
 - `ADMIN_PASSWORD`: password required for each authorization.
 
-Redirect configuration:
+Remote OAuth registrations:
 
-- `OAUTH_REDIRECT_URI`: optional exact callback URI.
-- `OAUTH_REDIRECT_URI_ALLOWLIST`: comma-separated callback rules. Bare entries and `exact:` entries match exactly; `prefix:` entries match by string prefix. Configure only trusted callback destinations.
+- Add one entry per client to `~/.mcp-shell/oauth-clients.yaml`; public clients use PKCE without a secret, while confidential clients use an individual secret.
+- Redirect rules belong to each client. Use exact callbacks by default and narrow `prefix` rules only when required.
+- Existing single-client `OAUTH_CLIENT_*` and `OAUTH_REDIRECT_URI*` environment settings remain a deprecated fallback while the YAML file is absent. Start with those old settings to migrate unversioned token state, then move the registration to YAML and remove the old variables from both `env` and the process environment. The fallback continues until YAML exists. See `README.md#configure` for the format and migration procedure.
 
 OAuth resource identity:
 
@@ -112,7 +111,7 @@ npm run dev
 
 ## Current Boundaries
 
-- One configured OAuth client and one owner password; no user accounts or login sessions.
+- Static OAuth client registrations share one owner password and full host authority; there are no user accounts, client-specific tool permissions, or dynamic client registration.
 - OAuth behavior is a deliberately minimal implementation, not a general-purpose identity provider.
 - Authorization grants the advertised `full` scope. Registered tools include arbitrary shell execution and file operations as the server process user; Shell roots are relative-path bases rather than filesystem sandboxes, and absolute paths remain accepted.
 - LSP tools require compatible language servers and project LSP configuration. Rename applies returned workspace edits directly.

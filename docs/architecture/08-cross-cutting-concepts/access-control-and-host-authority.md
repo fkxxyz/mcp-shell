@@ -25,6 +25,8 @@ facets:
 
 The meaningful protected asset is the process user's host authority, not merely MCP metadata. Any mechanism that admits a caller to destructive tools must therefore be evaluated similarly to remote shell access.
 
+Remote OAuth supports statically configured client registrations, but all registrations authorize the same owner-controlled full host authority. A public client's ID is not proof of application identity; PKCE protects the authorization-code flow, while owner-password approval remains the user authorization step. Client removal invalidates its persisted grants after restart. Registrations do not create separate users or per-client tool permissions.
+
 ## Remote Rule
 
 A network-reachable mcp-shell endpoint requires authentication before MCP requests reach session handling. The current implementation uses bearer tokens issued by its built-in OAuth flow.
@@ -71,6 +73,6 @@ Pinned wrappers are resource/ergonomic guardrails. Because user overrides intent
 
 ## Secrets and Logs
 
-OAuth client secret, administrator password, access tokens, refresh tokens, Web password, Observability token, and tool logs can expose significant authority or sensitive host content. They belong in owner-controlled local storage and must not be committed to the repository.
+OAuth client secrets, administrator password, access tokens, refresh tokens, Web password, Observability token, and tool logs can expose significant authority or sensitive host content. OAuth client registrations live in `~/.mcp-shell/oauth-clients.yaml`, which must be owner-readable only; secrets are not copied into the process environment. These materials belong in owner-controlled local storage and must not be committed to the repository.
 
 The Web password and Observability token are independent from the MCP OAuth client secret and owner authorization password. API responses and the SPA HTML shell are not cacheable; content-hashed static assets may be cached immutably. Cross-origin API access is not enabled, and untrusted tool content is rendered as text rather than executable markup.

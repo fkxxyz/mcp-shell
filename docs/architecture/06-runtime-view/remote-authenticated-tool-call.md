@@ -30,17 +30,17 @@ This View describes the **remote-mode implementation**.
 ## Authorization
 
 1. The client reads protected-resource and authorization-server metadata.
-2. `GET /authorize` validates response type, client ID, redirect URI, PKCE S256 challenge, and resource, then renders the password form.
+2. `GET /authorize` resolves the statically configured client ID, validates that client's redirect rules, PKCE S256 challenge, and resource, then renders the password form with its configured display name.
 3. `POST /authorize` verifies the configured administrator password and issues a short-lived one-time authorization code.
-4. `POST /token` authenticates the configured OAuth client and exchanges the code plus verifier for an access token and refresh token.
+4. `POST /token` authenticates the confidential client or accepts the registered public client authentication method, verifies that the authorization code belongs to the same client, and exchanges the code plus verifier for client-bound access and refresh tokens.
 5. Access tokens expire after one hour. Refresh tokens rotate when used.
 
-Authorization-code, access-token, and refresh-token state is persisted asynchronously to `~/.mcp-shell/state.json` using an atomic rename sequence.
+Authorization-code, access-token, and refresh-token state is persisted to `~/.mcp-shell/state.json` using an atomic rename sequence. Access and refresh tokens retain `clientId`; removing a registration causes its codes and tokens to be pruned at startup. Legacy unversioned state is migrated only when the old single-client ID is known.
 
 ## MCP Initialization
 
 1. The client sends `POST /mcp` with a valid bearer token.
-2. Bearer middleware validates the token and derives a non-secret actor fingerprint for logging.
+2. Bearer middleware validates the token, resource, expiry, and currently registered client, then derives a non-secret actor fingerprint for logging.
 3. If the request has no session ID and is an MCP initialize request, `McpSessionManager` creates a `StreamableHTTPServerTransport` with a generated session ID.
 4. A new `McpServer` is constructed and all tools are registered for that transport.
 5. The initialized transport is stored in the process-local session map.
@@ -87,4 +87,4 @@ Logging persistence or activity-publication failure is reported but does not con
 
 MCP transport close removes the session from the map. Process shutdown follows the authority and ordering rules in `../08-cross-cutting-concepts/process-lifecycle.md`: new requests, session initialization, and tool invocations are closed first; admitted tools receive a three-second natural-completion window; remaining managed external processes are then terminated; admitted HTTP responses drain before MCP transports and shared stores are closed.
 
-A process restart invalidates active MCP sessions because the transport map is not durable. Persisted Shells remain addressable through their existing IDs after restart. Persisted OAuth tokens can remain valid until their own expiry or rotation rules invalidate them.
+A process restart invalidates active MCP sessions because the transport map is not durable. Persisted Shells remain addressable through their existing IDs after restart. Persisted OAuth tokens remain valid while their client registration and resource remain accepted, and until expiry or refresh rotation invalidates them.

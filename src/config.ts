@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { applyCommandPath, type CommandPathPolicy } from "./command-path.js";
+import { loadOAuthClients, type OAuthClient } from "./auth/oauth-clients.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,6 +27,7 @@ type BaseAppConfig = {
     envFile: string;
     shellEnvFile: string | null;
     stateFile: string;
+    oauthClientsFile?: string;
     shellsDbFile: string;
     userBinDir: string;
     repoBinDir: string;
@@ -40,11 +42,9 @@ export type RemoteAppConfig = BaseAppConfig & {
   mode: "remote";
   publicBaseUrl: string;
   oauth: {
-    clientId: string;
-    clientSecret: string;
+    clients: OAuthClient[];
+    legacyClientId?: string;
     adminPassword: string;
-    redirectUri: string;
-    redirectUriAllowlist: string[];
     resourceAliases: string[];
   };
 };
@@ -55,6 +55,7 @@ export async function loadConfig(): Promise<AppConfig> {
   const configDir = join(homedir(), ".mcp-shell");
   const envFile = join(configDir, "env");
   const stateFile = join(configDir, "state.json");
+  const oauthClientsFile = join(configDir, "oauth-clients.yaml");
   const shellsDbFile = join(configDir, "shells.db");
   const userBinDir = join(configDir, "bin");
   const repoBinDir = fileURLToPath(new URL("../bin/", import.meta.url));
@@ -93,7 +94,7 @@ export async function loadConfig(): Promise<AppConfig> {
     webPassword,
     observabilityToken,
     toolLogs: { dir: toolLogDir, maxCalls: toolLogMaxCalls },
-    paths: { configDir, envFile, shellEnvFile, stateFile, shellsDbFile, userBinDir, repoBinDir },
+    paths: { configDir, envFile, shellEnvFile, stateFile, oauthClientsFile, shellsDbFile, userBinDir, repoBinDir },
   };
 
   if (mode === "local") return { ...common, mode };
@@ -101,20 +102,16 @@ export async function loadConfig(): Promise<AppConfig> {
   const publicBaseUrl = validatePublicBaseUrl(
     mustEnv("PUBLIC_BASE_URL", envFile).replace(/\/+$/, ""),
   );
+  const oauthClients = await loadOAuthClients(oauthClientsFile, process.env);
 
   return {
     ...common,
     mode,
     publicBaseUrl,
     oauth: {
-      clientId: mustEnv("OAUTH_CLIENT_ID", envFile),
-      clientSecret: mustEnv("OAUTH_CLIENT_SECRET", envFile),
+      clients: oauthClients.clients,
+      ...(oauthClients.legacy ? { legacyClientId: oauthClients.clients[0]?.clientId } : {}),
       adminPassword: mustEnv("ADMIN_PASSWORD", envFile),
-      redirectUri: process.env.OAUTH_REDIRECT_URI ?? "",
-      redirectUriAllowlist: (process.env.OAUTH_REDIRECT_URI_ALLOWLIST ?? "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
       resourceAliases: parseOAuthResourceAliases(process.env.OAUTH_RESOURCE_ALIASES),
     },
   };
@@ -133,13 +130,6 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
       "# MCP Shell configuration",
       "MODE=remote",
       "PUBLIC_BASE_URL=https://mcp.example.com",
-      "OAUTH_CLIENT_ID=chatgpt",
-      "OAUTH_CLIENT_SECRET=CHANGE_ME",
-      "# Optional stable redirect URI for one client:",
-      "OAUTH_REDIRECT_URI=",
-      "# Comma-separated allowlist. Use exact: or prefix: rules.",
-      "# Example for ChatGPT dynamic callbacks:",
-      "OAUTH_REDIRECT_URI_ALLOWLIST=prefix:https://chatgpt.com/connector/oauth/",
       "# Optional HTTPS identifiers that name the same protected MCP resource:",
       "OAUTH_RESOURCE_ALIASES=",
       "ADMIN_PASSWORD=CHANGE_ME",
@@ -158,8 +148,22 @@ async function readServerEnvFile(configDir: string, envFile: string): Promise<En
 
     await writeFile(envFile, template, { mode: 0o600 });
     await chmod(envFile, 0o600);
+    const oauthClientsFile = join(configDir, "oauth-clients.yaml");
+    try {
+      await stat(oauthClientsFile);
+    } catch (oauthError: any) {
+      if (oauthError?.code !== "ENOENT") throw oauthError;
+      await writeFile(oauthClientsFile, [
+        "version: 1",
+        "clients: []",
+        "",
+        "# Add one entry per OAuth client. See README.md for the schema.",
+        "",
+      ].join("\n"), { mode: 0o600 });
+      await chmod(oauthClientsFile, 0o600);
+    }
 
-    throw new Error(`Created config template at ${envFile}. Edit it, then start the server again.`);
+    throw new Error(`Created config templates at ${envFile} and ${oauthClientsFile}. Edit them, then start the server again.`);
   }
 }
 

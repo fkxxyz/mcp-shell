@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -111,4 +111,46 @@ test("remote mode keeps all-interface binding and bearer-protected /mcp", async 
   });
   assert.equal(mcp.status, 401);
   assert.match(mcp.headers.get("www-authenticate") ?? "", /^Bearer /);
+});
+
+test("remote startup migrates legacy token state before admitting the configured client", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-shell-remote-legacy-state-test-"));
+  const base = makeConfig();
+  const stateFile = join(dir, "state.json");
+  const legacyAccessToken = "legacy-access-token";
+  await writeFile(stateFile, JSON.stringify({
+    authorizationCodes: [],
+    accessTokens: [[legacyAccessToken, {
+      resource: base.publicBaseUrl,
+      expiresAt: Date.now() + 60_000,
+    }]],
+    refreshTokens: [["legacy-refresh-token", { resource: base.publicBaseUrl }]],
+  }));
+  const config: RemoteAppConfig = {
+    ...base,
+    oauth: { ...base.oauth, legacyClientId: base.oauth.clients[0]!.clientId },
+    toolLogs: { dir: join(dir, "tool-logs"), maxCalls: 10_000 },
+    paths: {
+      ...base.paths,
+      configDir: dir,
+      stateFile,
+      shellsDbFile: join(dir, "shells.db"),
+    },
+  };
+  const ctx = await listen(config);
+  t.after(async () => {
+    await close(ctx.server);
+    await ctx.runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const migrated = JSON.parse(await readFile(stateFile, "utf8"));
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.accessTokens[0][1].clientId, base.oauth.clients[0]!.clientId);
+  assert.equal(migrated.refreshTokens[0][1].clientId, base.oauth.clients[0]!.clientId);
+
+  const response = await fetch(`${ctx.baseUrl}/mcp`, {
+    headers: { authorization: `Bearer ${legacyAccessToken}` },
+  });
+  assert.equal(response.status, 400, "bearer should pass authentication and fail only because the MCP session is absent");
 });

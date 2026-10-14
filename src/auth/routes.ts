@@ -15,6 +15,12 @@ export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService):
   });
 
   router.get("/.well-known/oauth-authorization-server", (_req, res) => {
+    const methods = new Set<string>();
+    if (config.oauth.clients.some((client) => client.authentication === "public")) methods.add("none");
+    if (config.oauth.clients.some((client) => client.authentication === "confidential")) {
+      methods.add("client_secret_basic");
+      methods.add("client_secret_post");
+    }
     res.json({
       issuer: config.publicBaseUrl,
       authorization_endpoint: `${config.publicBaseUrl}/authorize`,
@@ -22,7 +28,7 @@ export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService):
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+      token_endpoint_auth_methods_supported: [...methods],
       scopes_supported: ["full"],
     });
   });
@@ -32,7 +38,7 @@ export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService):
     const validation = oauth.validateAuthorizeParams(parsed);
     if (!validation.ok) return oauthError(res, validation.status, validation.error);
 
-    return res.status(200).type("html").send(renderAuthorizePage(parsed));
+    return res.status(200).type("html").send(renderAuthorizePage(parsed, oauth.clientName(parsed.clientId) ?? parsed.clientId));
   });
 
   router.post("/authorize", (req, res) => {
@@ -57,7 +63,7 @@ export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService):
     res.setHeader("Pragma", "no-cache");
 
     const credentials = parseClientCredentials(req);
-    if (!oauth.validateClientCredentials(credentials.clientId, credentials.clientSecret)) {
+    if (!oauth.validateClientCredentials(credentials.clientId, credentials.method, credentials.clientSecret)) {
       res.setHeader("WWW-Authenticate", 'Basic realm="mcp-oauth"');
       return res.status(401).json({ error: "invalid_client" });
     }
@@ -65,6 +71,7 @@ export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService):
     const grantType = String(req.body.grant_type ?? "");
     if (grantType === "authorization_code") {
       const pair = oauth.exchangeAuthorizationCode({
+        clientId: credentials.clientId,
         code: String(req.body.code ?? ""),
         redirectUri: String(req.body.redirect_uri ?? ""),
         verifier: String(req.body.code_verifier ?? ""),
@@ -76,6 +83,7 @@ export function createOAuthRouter(config: RemoteAppConfig, oauth: OAuthService):
 
     if (grantType === "refresh_token") {
       const pair = oauth.refreshAccessToken(
+        credentials.clientId,
         String(req.body.refresh_token ?? ""),
         String(req.body.resource ?? config.publicBaseUrl),
       );
@@ -103,25 +111,33 @@ function parseAuthorizeParams(req: Request): AuthorizeParams {
   };
 }
 
-function parseClientCredentials(req: Request): { clientId: string; clientSecret: string } {
-  let clientId = String(req.body.client_id ?? "");
-  let clientSecret = String(req.body.client_secret ?? "");
+function parseClientCredentials(req: Request): {
+  clientId: string;
+  method: "none" | "client_secret_basic" | "client_secret_post";
+  clientSecret?: string;
+} {
+  const bodyClientId = String(req.body.client_id ?? "");
+  const bodyClientSecret = String(req.body.client_secret ?? "");
   const authorization = req.header("authorization");
 
   if (authorization?.startsWith("Basic ")) {
     try {
       const decoded = Buffer.from(authorization.slice(6), "base64").toString("utf8");
       const colon = decoded.indexOf(":");
-      if (colon >= 0) {
-        clientId = decoded.slice(0, colon);
-        clientSecret = decoded.slice(colon + 1);
+      if (colon < 0) return { clientId: "", method: "client_secret_basic" };
+      const clientId = decoded.slice(0, colon);
+      if ((bodyClientId && bodyClientId !== clientId) || bodyClientSecret) {
+        return { clientId: "", method: "client_secret_basic" };
       }
+      return { clientId, clientSecret: decoded.slice(colon + 1), method: "client_secret_basic" };
     } catch {
-      return { clientId: "", clientSecret: "" };
+      return { clientId: "", method: "client_secret_basic" };
     }
   }
 
-  return { clientId, clientSecret };
+  return bodyClientSecret
+    ? { clientId: bodyClientId, clientSecret: bodyClientSecret, method: "client_secret_post" }
+    : { clientId: bodyClientId, method: "none" };
 }
 
 function sendTokenPair(res: Response, pair: { accessToken: string; refreshToken: string; expiresIn: number; scope: string }) {
@@ -134,7 +150,8 @@ function sendTokenPair(res: Response, pair: { accessToken: string; refreshToken:
   });
 }
 
-function renderAuthorizePage(params: AuthorizeParams): string {
+function renderAuthorizePage(params: AuthorizeParams, clientName: string): string {
+  const title = `Authorize MCP access for ${clientName}`;
   return `<!doctype html>
 <html>
 <head>
@@ -143,7 +160,7 @@ function renderAuthorizePage(params: AuthorizeParams): string {
   <meta name="viewport" content="width=device-width,initial-scale=1">
 </head>
 <body>
-  <h2>Authorize ChatGPT MCP access</h2>
+  <h2>${escapeHtml(title)}</h2>
   <p>Successful login grants full access to this MCP server.</p>
   <form method="post" action="/authorize">
     ${hidden("response_type", params.responseType)}

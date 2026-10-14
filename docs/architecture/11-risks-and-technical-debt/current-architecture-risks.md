@@ -39,6 +39,19 @@ Control: keep the trust boundary explicit and grant access only to clients and m
 
 Control: keep one-process deployment as an explicit constraint. Reassess before horizontal scaling.
 
+## Legacy OAuth Configuration Has No Enforced Retirement Point
+
+- **Root cause:** the deprecated environment-based single-client path remains active whenever `oauth-clients.yaml` is absent; a warning does not enforce completion of migration.
+- **Primary cost dimension:** configuration lifecycle and secret exposure.
+- **Current cost:** operators can remain indefinitely on the legacy path, preserving a second configuration authority and keeping the OAuth secret in the process environment. The intended migration outcome is therefore optional rather than observable.
+- **Evidence:** `loadOAuthClients` falls back to `OAUTH_CLIENT_*` when the YAML file is missing. The README and OAuth registration decision now state that this fallback can repeat until YAML is created; state migration itself is versioned and tested.
+- **Reachable better state:** after existing installations have had a documented migration window, either remove the fallback in a planned breaking release or add a bounded migration-completion marker that does not risk losing legacy token ownership. Do not silently remove access to persisted tokens.
+- **Governing constraint:** every compatibility path has an explicit supported lifetime and an observable exit condition, or is documented as permanent compatibility rather than described as temporary.
+- **Scope discovery:** include config loading, inherited process environment, OAuth state versioning, first-start templates, migration guidance, and systemd/direct-start workflows.
+- **Repair direction:** defer removal until a release boundary is chosen; meanwhile keep the warning and migration instructions accurate. Avoid a marker or automatic config rewrite until its recovery behavior is proven.
+- **Exit criteria:** the legacy path is either removed after a tested migration window or has an explicitly accepted permanent owner and support contract.
+- **Priority:** low; this is a bounded compatibility and environment-secret exposure cost, with no migration failure reported.
+
 ## Tool Logs Contain Sensitive Payloads
 
 Inputs and outputs may contain source code, file contents, command output, credentials accidentally printed by tools, or other local data.
@@ -58,6 +71,19 @@ Control: store logs under owner-controlled local paths with restrictive permissi
 - **Repair direction:** first establish whether identifiers are actually sensitive or low entropy and who consumes call correlation. If pseudonymization becomes material, design a persistent key and rotation lifecycle before changing the public field's semantics.
 - **Exit criteria:** privacy/stability risks are bounded by documented evidence and accepted policy, or identifier exposure is replaced by a tested, stable scoped pseudonym whose restart, rotation, legacy-history and API behavior are explicit.
 - **Priority:** medium if call-history access broadens; currently a recognized sensitivity and contract risk, not an observed data leak.
+
+## Authenticated OAuth Client Identity Is Not Available in Tool History
+
+- **Root cause:** bearer validation checks the token's registered client, but request context passed to MCP and tool recording retains only a token-derived actor fingerprint plus client-declared MCP identity fields.
+- **Primary cost dimension:** incident attribution and security diagnosis.
+- **Current cost:** when separate OAuth registrations are used, retained calls cannot be reliably grouped by authenticated OAuth client. `clientInfo.name` and logical session hints remain caller-supplied and cannot fill that role.
+- **Evidence:** the OAuth token state now stores `clientId` and validates that registration before MCP dispatch, while the bearer middleware continues to derive only the token actor fingerprint for tool logging. No OAuth client field was added to Observability records or API contracts.
+- **Reachable better state:** if client-specific incident attribution is required, carry authenticated `clientId` through request context into call history and read models as a distinct field; preserve caller-declared names as observational data.
+- **Governing constraint:** any claimed per-client audit identity must originate from authenticated token state, not MCP initialization metadata.
+- **Scope discovery:** include bearer middleware, MCP request/tool context, live Activity, durable call history, migrations, API DTOs, and tests distinguishing authenticated from caller-declared identity.
+- **Repair direction:** defer the cross-contract change until client-level audit use is confirmed; do not add client-specific permissions or a user-account model as part of attribution.
+- **Exit criteria:** either an authenticated OAuth client identifier is available in the required audit views with migration and privacy behavior tested, or the absence of client-level attribution is explicitly accepted for the supported operations model.
+- **Priority:** low until operators need to investigate incidents by OAuth registration; independent grant revocation works without this field.
 
 ## External Observability API Compatibility Lacks an Independent Contract Baseline
 
@@ -180,6 +206,7 @@ Control: clients must reinitialize MCP sessions after reconnect. Do not infer MC
 - **Current cost:** conceptual boundary changes require broad coordinated prose edits and create omission risk. Connection/resource-alias work previously touched many architecture Views plus README and AGENTS. The 2026-10-06 Web Console migration repeated the pattern across goals, context, strategy, decomposition, runtime, deployment, access control, observability, glossary, README, AGENTS, and a new ADR. The 2026-10-07 durable Tool History change repeated the same synchronization pattern across decomposition, two runtime Views, deployment, two cross-cutting concepts, quality scenarios, debt records, README, AGENTS, and a new ADR even though its governing rules were concentrated in one storage/authority decision.
 - **Evidence:** unrelated architecture changes—connection/resource identity, the Web Console boundary, and durable Tool History—have each produced large documentation synchronization sets even though each had a small number of governing rules. A later four-line `GET /` convenience redirect for the Web Console still required coordinated current-state edits in the Web Console ADR, system decomposition, README, and AGENTS guidance. The 2026-10-06 Activity input-preview change likewise required coordinated updates to the observability concept, Web Console runtime View, and this debt record to keep preview lifecycle and presentation ownership coherent. During the Tool History migration, the same storage/retention authority had to be reconciled manually across architecture, operator, and agent guidance before old `ToolLogStore/index.jsonl` claims disappeared.
 - **Additional evidence (2026-10-07):** promoting Observability API to a first-class surface required synchronized edits across README, AGENTS, goals, context, strategy, decomposition, runtime/deployment/access/observability Views, glossary, quality scenarios, and two related ADRs. Explicitly assigning the old Web Console ADR to UI concerns and the new Observability API ADR to transport/auth/compatibility reduced conflicting authority, but broad manual projection maintenance remains.
+- **Additional evidence (static OAuth client change):** README and architecture Views/decision records were updated while the project-root `AGENTS.md` still described one required OAuth client and environment-only credentials. That stale entry-point projection was corrected in the same follow-up, providing another instance of the synchronization mechanism rather than an outstanding stale claim.
 - **Cost mechanism:** documents with distinct audiences also repeat normative current-state facts. Synchronization therefore relies on maintainer recall and broad search rather than a clear authority/projection relationship, so change radius grows faster than the number of actual decisions.
 - **Reachable better state:** keep distinct Views where they provide local value, but make authority boundaries explicit: ADRs own decisions/rationale, cross-cutting concepts own enduring invariants, deployment/runtime Views own consequences in their dimensions, and README/AGENTS summarize or link rather than silently becoming competing semantic authorities.
 - **Governing constraint:** each long-lived architecture rule has one identifiable semantic authority; other maintained documents may project consequences for their audience without redefining the rule.

@@ -56,6 +56,7 @@ test("OAuth discovery endpoints expose configured metadata", async (t) => {
   assert.equal(body.authorization_endpoint, `${ctx.config.publicBaseUrl}/authorize`);
   assert.equal(body.token_endpoint, `${ctx.config.publicBaseUrl}/token`);
   assert.deepEqual(body.code_challenge_methods_supported, ["S256"]);
+  assert.deepEqual(body.token_endpoint_auth_methods_supported, ["client_secret_basic", "client_secret_post"]);
 });
 
 test("authorize GET validates parameters and renders escaped form values", async (t) => {
@@ -63,10 +64,12 @@ test("authorize GET validates parameters and renders escaped form values", async
   t.after(() => ctx.close());
 
   const verifier = "route-test-verifier";
+  const client = ctx.config.oauth.clients[0]!;
+  const redirectUri = client.redirectUris[0]!.value;
   const url = new URL(`${ctx.baseUrl}/authorize`);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", ctx.config.oauth.clientId);
-  url.searchParams.set("redirect_uri", ctx.config.oauth.redirectUri);
+  url.searchParams.set("client_id", client.clientId);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("code_challenge", pkceChallenge(verifier));
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("resource", ctx.config.publicBaseUrl);
@@ -113,10 +116,12 @@ test("authorization code flow accepts a configured resource alias and code repla
   t.after(() => ctx.close());
 
   const verifier = "http-verifier";
+  const client = ctx.config.oauth.clients[0]!;
+  const redirectUri = client.redirectUris[0]!.value;
   const authorizeBody = new URLSearchParams({
     response_type: "code",
-    client_id: ctx.config.oauth.clientId,
-    redirect_uri: ctx.config.oauth.redirectUri,
+    client_id: client.clientId,
+    redirect_uri: redirectUri,
     code_challenge: pkceChallenge(verifier),
     code_challenge_method: "S256",
     resource: alias,
@@ -142,11 +147,11 @@ test("authorization code flow accepts a configured resource alias and code repla
   const tokenBody = new URLSearchParams({
     grant_type: "authorization_code",
     code,
-    redirect_uri: ctx.config.oauth.redirectUri,
+    redirect_uri: redirectUri,
     code_verifier: verifier,
     resource: alias,
   });
-  const basic = Buffer.from(`${ctx.config.oauth.clientId}:${ctx.config.oauth.clientSecret}`).toString("base64");
+  const basic = Buffer.from(`${client.clientId}:${client.authentication === "confidential" ? client.secret : ""}`).toString("base64");
   const tokenResponse = await fetch(`${ctx.baseUrl}/token`, {
     method: "POST",
     headers: {
@@ -173,4 +178,52 @@ test("authorization code flow accepts a configured resource alias and code repla
   });
   assert.equal(replayResponse.status, 400);
   assert.deepEqual(await replayResponse.json(), { error: "invalid_grant" });
+});
+
+test("public client uses token authentication none with PKCE", async (t) => {
+  const base = makeConfig();
+  const publicClient = {
+    clientId: "public-client",
+    name: "Public client",
+    authentication: "public" as const,
+    redirectUris: [{ type: "exact" as const, value: "http://127.0.0.1:43123/callback" }],
+  };
+  const ctx = await startAuthApp({ clients: [...base.oauth.clients, publicClient] });
+  t.after(() => ctx.close());
+
+  const metadata = await fetch(`${ctx.baseUrl}/.well-known/oauth-authorization-server`).then((response) => response.json()) as any;
+  assert.deepEqual(metadata.token_endpoint_auth_methods_supported, ["none", "client_secret_basic", "client_secret_post"]);
+
+  const verifier = "public-client-verifier";
+  const redirectUri = "http://127.0.0.1:43123/callback";
+  const authorizeResponse = await fetch(`${ctx.baseUrl}/authorize`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      response_type: "code",
+      client_id: "public-client",
+      redirect_uri: redirectUri,
+      code_challenge: pkceChallenge(verifier),
+      code_challenge_method: "S256",
+      resource: ctx.config.publicBaseUrl,
+      password: ctx.config.oauth.adminPassword,
+    }),
+  });
+  assert.equal(authorizeResponse.status, 302);
+  const code = new URL(authorizeResponse.headers.get("location")!).searchParams.get("code")!;
+  const tokenResponse = await fetch(`${ctx.baseUrl}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: "public-client",
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+    }),
+  });
+  assert.equal(tokenResponse.status, 200);
+  const pair = await tokenResponse.json() as any;
+  assert.equal(ctx.oauth.validateAccessToken(pair.access_token), true);
 });

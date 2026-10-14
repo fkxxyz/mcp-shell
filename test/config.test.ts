@@ -129,6 +129,48 @@ test("loadConfig accepts local mode without remote OAuth configuration", async (
   }
 });
 
+test("loadConfig reads remote OAuth registrations from the private YAML file", async () => {
+  const home = await mkdtemp(join(tmpdir(), "mcp-shell-remote-config-test-"));
+  const originalEnv = { ...process.env };
+
+  try {
+    process.env.HOME = home;
+    for (const key of ["OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET", "OAUTH_REDIRECT_URI", "OAUTH_REDIRECT_URI_ALLOWLIST"]) {
+      delete process.env[key];
+    }
+    const configDir = join(home, ".mcp-shell");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, "env"), [
+      "MODE=remote",
+      "PUBLIC_BASE_URL=https://mcp.example.test",
+      "ADMIN_PASSWORD=admin-password",
+      "",
+    ].join("\n"));
+    await writeFile(join(configDir, "oauth-clients.yaml"), [
+      "version: 1",
+      "clients:",
+      "  - clientId: desktop-app",
+      "    name: Desktop App",
+      "    authentication: public",
+      "    redirectUris:",
+      "      - type: exact",
+      "        value: http://127.0.0.1:43123/callback",
+      "",
+    ].join("\n"), { mode: 0o600 });
+
+    const config = await loadConfig();
+    assert.equal(config.mode, "remote");
+    if (config.mode !== "remote") throw new Error("expected remote config");
+    assert.equal(config.oauth.clients[0]?.clientId, "desktop-app");
+    assert.equal(config.oauth.clients[0]?.authentication, "public");
+    assert.equal(config.paths.oauthClientsFile, join(configDir, "oauth-clients.yaml"));
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, originalEnv);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("parseEnvFile parses simple dotenv values without shell evaluation", () => {
   assert.deepEqual(
     parseEnvFile([
