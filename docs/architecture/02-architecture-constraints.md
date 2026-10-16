@@ -66,4 +66,4 @@ It is intentionally not a general identity platform.
 
 ## Search Budget
 
-Repository wrappers for `rg`, `grep`, `find`, and `fd` impose a 200 ms wall-clock budget unless the caller deliberately supplies wrapper-only `--unsafe`.
+Repository wrappers for `rg`, `grep`, `find`, and `fd` impose a 200 ms wall-clock budget unless the caller deliberately supplies wrapper-only `--unsafe`, or `grep`/`rg` reads from a pipe.

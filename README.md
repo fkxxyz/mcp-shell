@@ -306,6 +306,8 @@ If a broad search is genuinely required, pass:
 
 The wrapper consumes this flag and runs the underlying command without the search budget.
 
+`grep` and `rg` whose stdin is a pipe (for example `long-running-script | grep key`) are not time-limited, because they filter a stream instead of scanning files. Commands started by the shell tool have stdin on `/dev/null`, so ordinary file searches stay limited. `find` and `fd` are always limited.
+
 ## Development
 
 Start the TypeScript server watcher and Vite together:

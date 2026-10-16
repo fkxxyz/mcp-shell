@@ -57,7 +57,14 @@ for arg in "$@"; do
   fi
 done
 
-if ((unsafe)); then
+# grep/rg reading from a pipe (e.g. `long-script | grep key`) do not scan the
+# disk, and the producer may legitimately run for a long time, so skip the budget.
+stdin_is_pipe=0
+if [[ "$command_name" == grep || "$command_name" == rg ]] && [[ -p /dev/stdin ]]; then
+  stdin_is_pipe=1
+fi
+
+if ((unsafe || stdin_is_pipe)); then
   exec "$real_command" "${args[@]}"
 fi
 

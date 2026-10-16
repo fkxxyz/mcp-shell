@@ -62,3 +62,33 @@ test("search wrapper strips --unsafe and bypasses the time budget", async () => 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("grep and rg reading from a pipe bypass the time budget, other commands do not", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-search-wrapper-"));
+
+  try {
+    for (const name of ["grep", "rg", "find"]) {
+      const fake = join(dir, name);
+      await writeFile(fake, "#!/bin/bash\necho partial\nsleep 0.5\necho completed\n", "utf8");
+      await chmod(fake, 0o755);
+    }
+    const env = { ...process.env, PATH: [repoBin, dir, "/usr/bin", "/bin"].join(delimiter) };
+    // Use a real shell pipe: spawnSync({ input }) creates a socket, not a FIFO.
+    const run = (name: string, piped = false) =>
+      spawnSync("/bin/bash", ["-c", piped ? `echo data | '${wrapper}' ${name}` : `'${wrapper}' ${name}`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env,
+      });
+
+    for (const name of ["grep", "rg"]) {
+      const piped = run(name, true);
+      assert.equal(piped.status, 0, name);
+      assert.equal(piped.stdout, "partial\ncompleted\n", name);
+      assert.equal(run(name).status, 124, `${name} without a pipe`);
+    }
+    assert.equal(run("find", true).status, 124);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

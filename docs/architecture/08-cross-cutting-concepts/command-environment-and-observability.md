@@ -43,7 +43,7 @@ LSP adds its server-specific environment and supplemental command directories be
 
 ## Search Guardrails
 
-Repository wrappers for `rg`, `grep`, `find`, and `fd` use a 200 ms wall-clock budget. If exceeded, they preserve output already produced, terminate the underlying command, and emit a structured timeout explanation. `--unsafe` deliberately bypasses that budget after the wrapper removes the flag.
+Repository wrappers for `rg`, `grep`, `find`, and `fd` use a 200 ms wall-clock budget. If exceeded, they preserve output already produced, terminate the underlying command, and emit a structured timeout explanation. `--unsafe` deliberately bypasses that budget after the wrapper removes the flag. `grep` and `rg` whose stdin is a pipe also bypass it, since they filter a stream instead of scanning files (shell-tool commands start with stdin on `/dev/null`).
 
 The user override directory is first by design. Therefore these wrappers improve default behavior but are not an enforcement boundary.
 
